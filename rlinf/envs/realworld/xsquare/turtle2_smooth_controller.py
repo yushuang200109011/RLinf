@@ -1,4 +1,17 @@
-#!/usr/bin/env python3
+# Copyright 2026 The RLinf Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import rospy
 import sys
 import os
@@ -31,19 +44,16 @@ class Turtle2SmoothController(Worker):
         env_idx: int = 0,
         node_rank: int = 0,
         worker_rank: int = 0,
-        ros_pkg: str = "serl_franka_controllers",
     ):
         """Launch a FrankaController on the specified worker's node.
 
         Args:
-            robot_ip (str): The IP address of the robot arm.
-            env_idx (int): The index of the environment.
+            freq (int): The interpolate frequency for the controller.
             node_rank (int): The rank of the node to launch the controller on.
             worker_rank (int): The rank of the env worker to the controller is associated with.
-            ros_pkg (str): The ROS package name for the Franka controllers.
 
         Returns:
-            FrankaController: The launched FrankaController instance.
+            Turtle2SmoothController: The launched Turtle2SmoothController instance.
         """
         cluster = Cluster()
         placement = NodePlacementStrategy(node_ranks=[node_rank])
@@ -173,3 +183,9 @@ class Turtle2SmoothController(Worker):
         self.right_arm_target = [0, 0, 0, 0, 0, 0, 0]
         print("Reset target to zero.")
         time.sleep(2.0)
+
+    def check_cams(self, timeout=0.5):
+        cam1_ok = self.controller.cam.check_cam1(timeout)
+        cam2_ok = self.controller.cam.check_cam2(timeout)
+        cam3_ok = self.controller.cam.check_cam3(timeout)
+        return cam1_ok, cam2_ok, cam3_ok

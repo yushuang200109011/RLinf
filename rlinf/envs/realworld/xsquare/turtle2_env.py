@@ -38,8 +38,8 @@ from rlinf.envs.realworld.xsquare.turtle2_robot_state import Turtle2RobotState
 
 @dataclass
 class Turtle2RobotConfig:
-    use_camera_ids: list[int] = field(default_factory=lambda: [0, 2]) # [0, 1, 2]
-    use_arm_ids: list[int] = field(default_factory=lambda: [0, 1])  # [0, 1]
+    use_camera_ids: list[int] = field(default_factory=lambda: [2]) # [0, 1, 2]
+    use_arm_ids: list[int] = field(default_factory=lambda: [1])  # [0, 1]
     
     is_dummy: bool = False
     use_dense_reward: bool = False
@@ -49,7 +49,7 @@ class Turtle2RobotConfig:
     # Positions are stored in eular angles (xyz for position, rzryrx for orientation)
     # It will be converted to quaternions internally
     target_ee_pose: np.ndarray = field(
-        default_factory=lambda: np.array([[0, 0, 0, 0, 0, 0],[0.3, 0.0, 0.1, 0.0, 1, 0.0]])
+        default_factory=lambda: np.array([[0, 0, 0, 0, 0, 0],[0.0, 0.0, 0.15, 0.0, 1, 0.0]])
     )
     reset_ee_pose: np.ndarray = field(default_factory=lambda: np.array(
         [[0.3, 0, 0.0, 0.2, 0, 0], [0.2, 0, 0.1, 0, 0.8, 0.0]]
@@ -58,7 +58,7 @@ class Turtle2RobotConfig:
     max_num_steps: int = 100
     reward_threshold: np.ndarray = field(default_factory=lambda: np.zeros((2, 6)))
     action_scale: np.ndarray = field(
-        default_factory=lambda: np.ones((2, 3))
+        default_factory=lambda: np.ones(3)
     )  # [xyz move scale, orientation scale, gripper scale]
     enable_random_reset: bool = True
 
@@ -71,6 +71,7 @@ class Turtle2RobotConfig:
     ee_pose_limit_max: np.ndarray = field(default_factory=lambda: np.zeros((2, 6)))
     gripper_width_limit_min: float = 0.0
     gripper_width_limit_max: float = 5.0
+    enforce_gripper_close: bool = True
     enable_gripper_penalty: bool = True
     gripper_penalty: float = 0.1
     save_video_path: Optional[str] = None
@@ -269,44 +270,60 @@ class Turtle2Env(gym.Env):
     def step(self, action: np.ndarray):
         """Take a step in the environment.
 
-        action (np.ndarray): The action to take, in shape (2, 7).
+        action (np.ndarray): The action to take, in shape (7, ) or (14, ).
         """
+        assert action.shape == (len(self.config.use_arm_ids) * 7,), f"Action shape must be {(len(self.config.use_arm_ids) * 7,)}, but got {action.shape}."
+
         start_time = time.time()
 
-        # if self.use_rel_frame:
-        #     action = self.transform_action_ee_to_base(action)
-
         action = np.clip(action, self.action_space.low, self.action_space.high)
-        xyz_delta = action[:3]
 
-        self.next_position = self._franka_state.tcp_pose.copy()
-        self.next_position[:3] = (
-            self.next_position[:3] + xyz_delta * self.config.action_scale[0]
+        # deal with dual arms (xyz)
+        action = action.reshape(-1, 7)
+        xyz_delta = action[:, :3]
+
+        next_position1 = self._turtle2_state.follow1_pos.copy()
+        next_position2 = self._turtle2_state.follow2_pos.copy()
+        next_position1[:3] = (
+            next_position1[:3] + xyz_delta[0] * self.config.action_scale[0]
+        )
+        next_position2[:3] = (
+            next_position2[:3] + xyz_delta[1] * self.config.action_scale[0]
         )
 
-        if not self.config.is_dummy:
-            self.next_position[3:] = (
-                R.from_euler("xyz", action[3:6] * self.config.action_scale[1])
-                * R.from_quat(self._franka_state.tcp_pose[3:].copy())
-            ).as_quat()
+        # deal with dual arms (rpy)
+        next_position1[3:6] = (next_position1[3:6] + action[0, 3:6] * self.config.action_scale[1])
+        next_position2[3:6] = (next_position2[3:6] + action[1, 3:6] * self.config.action_scale[1])
 
-            gripper_action = action[6] * self.config.action_scale[2]
-
-            is_gripper_action_effective = self._gripper_action(gripper_action)
-            self._move_action(self._clip_position_to_safety_box(self.next_position))
+        if self.config.enforce_gripper_close:
+            next_position1[6] = self.config.gripper_width_limit_min
+            next_position2[6] = self.config.gripper_width_limit_min
         else:
-            is_gripper_action_effective = True
+            next_position1[6] = action[0, 6]
+            next_position2[6] = action[1, 6]
+
+        # clip to safety box
+        next_position1 = self._clip_position_to_safety_box(next_position1)
+        next_position2 = self._clip_position_to_safety_box(next_position2)
+
+        if not self.config.is_dummy:
+            self._controller.move_arm(
+                next_position1.tolist(), next_position2.tolist()
+            ).wait()
+        else:
+            pass
 
         self._num_steps += 1
         step_time = time.time() - start_time
         time.sleep(max(0, (1.0 / self.config.step_frequency) - step_time))
 
         if not self.config.is_dummy:
-            self._franka_state = self._controller.get_state().wait()[0]
+            self._turtle2_state = self._controller.get_state().wait()[0]
         else:
-            self._franka_state = self._franka_state
+            self._turtle2_state = self._turtle2_state
         observation = self._get_observation()
-        reward = self._calc_step_reward(observation, is_gripper_action_effective)
+        # reward = self._calc_step_reward(observation, is_gripper_action_effective)
+        reward = 0
         terminated = reward == 1
         truncated = self._num_steps >= self.config.max_num_steps
         return observation, reward, terminated, truncated, {}
@@ -354,25 +371,6 @@ class Turtle2Env(gym.Env):
         else:
             return 0.0
 
-    def _open_cameras(self):
-        self._cameras: list[Camera] = []
-        if self.config.camera_serials is None:
-            return
-        camera_infos = [
-            CameraInfo(name=f"wrist_{i + 1}", serial_number=n)
-            for i, n in enumerate(self.config.camera_serials)
-        ]
-        for info in camera_infos:
-            camera = Camera(info)
-            if not self.config.is_dummy:
-                camera.open()
-            self._cameras.append(camera)
-
-    def _close_cameras(self):
-        for camera in self._cameras:
-            camera.close()
-        self._cameras = []
-
     def _crop_frame(
         self, frame: np.ndarray, reshape_size: tuple[int, int]
     ) -> np.ndarray:
@@ -385,39 +383,7 @@ class Turtle2Env(gym.Env):
             start_y : start_y + crop_size, start_x : start_x + crop_size
         ]
         resized_frame = cv2.resize(cropped_frame, reshape_size)
-        return cropped_frame, resized_frame
-
-    def _get_camera_frames(self) -> dict[str, np.ndarray]:
-        """Get frames from all cameras."""
-        frames = {}
-        display_frames = {}
-        for camera in self._cameras:
-            try:
-                frame = camera.get_frame()
-                reshape_size = self.observation_space["frames"][
-                    camera._camera_info.name
-                ].shape[:2][::-1]
-                cropped_frame, resized_frame = self._crop_frame(frame, reshape_size)
-                frames[camera._camera_info.name] = resized_frame[
-                    ..., ::-1
-                ]  # Convert RGB to BGR
-                display_frames[camera._camera_info.name] = (
-                    resized_frame  # Original RGB for display
-                )
-                display_frames[f"{camera._camera_info.name}_full"] = (
-                    cropped_frame  # Non-resized version
-                )
-            except queue.Empty:
-                self._logger.warning(
-                    f"Camera {camera._camera_info.name} is not producing frames. Wait 5 seconds and try again."
-                )
-                time.sleep(5)
-                camera.close()
-                self._open_cameras()
-                return self._get_camera_frames()
-
-        self.camera_player.put_frame(display_frames)
-        return frames
+        return resized_frame
 
     # Robot actions
 
@@ -426,79 +392,23 @@ class Turtle2Env(gym.Env):
         position[:3] = np.clip(
             position[:3], self._xyz_safe_space.low, self._xyz_safe_space.high
         )
-        euler = R.from_quat(position[3:].copy()).as_euler("xyz")
-
-        # Clip first euler angle separately due to discontinuity from pi to -pi
-        sign = np.sign(euler[0])
-        euler[0] = sign * (
-            np.clip(
-                np.abs(euler[0]),
-                self._rpy_safe_space.low[0],
-                self._rpy_safe_space.high[0],
-            )
+        position[3:6] = np.clip(
+            position[3:6], self._rpy_safe_space.low, self._rpy_safe_space.high
         )
-
-        euler[1:] = np.clip(
-            euler[1:], self._rpy_safe_space.low[1:], self._rpy_safe_space.high[1:]
+        position[6] = np.clip(
+            position[6],
+            self.config.gripper_width_limit_min,
+            self.config.gripper_width_limit_max,
         )
-        position[3:] = R.from_euler("xyz", euler).as_quat()
 
         return position
-
-    def _clear_error(self):
-        self._controller.clear_errors().wait()
-
-    def _gripper_action(self, position: float, is_binary: bool = True):
-        if is_binary:
-            if (
-                position <= -self.config.binary_gripper_threshold
-                and self._franka_state.gripper_open
-            ):
-                # Close gripper
-                self._controller.close_gripper().wait()
-                time.sleep(0.6)
-                return True
-            elif (
-                position >= self.config.binary_gripper_threshold
-                and not self._franka_state.gripper_open
-            ):
-                # Open gripper
-                self._controller.open_gripper().wait()
-                time.sleep(0.6)
-                return True
-            else:  # No change
-                return False
-        else:
-            raise NotImplementedError("Non-binary gripper action not implemented.")
-
-    def _interpolate_move(self, pose: np.ndarray, timeout: float = 1.5):
-        num_steps = int(timeout * self.config.step_frequency)
-        self._franka_state: FrankaRobotState = self._controller.get_state().wait()[0]
-        pos_path = np.linspace(
-            self._franka_state.tcp_pose[:3], pose[:3], int(num_steps) + 1
-        )
-        quat_path = quat_slerp(
-            self._franka_state.tcp_pose[3:], pose[3:], int(num_steps) + 1
-        )
-
-        for pos, quat in zip(pos_path[1:], quat_path[1:]):
-            pose = np.concatenate([pos, quat])
-            self._move_action(pose.astype(np.float32))
-            time.sleep(1.0 / self.config.step_frequency)
-
-        self._franka_state: FrankaRobotState = self._controller.get_state().wait()[0]
-
-    def _move_action(self, position: np.ndarray):
-        if not self.config.is_dummy:
-            self._clear_error()
-            self._controller.move_arm(position.astype(np.float32)).wait()
-        else:
-            print(f"Executing dummy action towards {position=}.")
 
     def _get_observation(self) -> dict:
         if not self.config.is_dummy:
             frames = self._controller.get_cams(self.config.use_camera_ids).wait()[0]
             assert len(frames) == len(self.config.use_camera_ids), "get frames failed."
+            for i in range(len(frames)):
+                frames[i] = self._crop_frame(frames[i], (128, 128))
             tcp_pose = []
             if 0 in self.config.use_arm_ids:
                 tcp_pose.append(self._turtle2_state.follow1_pos)
@@ -538,6 +448,18 @@ def main():
                 print(f"{key}.{subkey}: ", obs[key][subkey].shape)
         else:
             print(f"{key}: ", obs[key].shape)
+    
+    print("test step")
+    for i in range(50):
+        action = np.array([0.005, 0, 0.002, 0, 0, 0, 0])
+        obs, _, _, _, _ = env.step(action)
+        print(f"first stage, step {i}:", obs["state"]["tcp_pose"])
+    
+    for i in range(50):
+        action = np.array([0.000, 0, -0.003, 0, 0, 0, i*0.5])
+        obs, _, _, _, _ = env.step(action)
+        print(f"second stage, step {i}:", obs["state"]["tcp_pose"])
+
 
 if __name__ == "__main__":
     main()

@@ -189,3 +189,19 @@ class Turtle2SmoothController(Worker):
         cam2_ok = self.controller.cam.check_cam2(timeout)
         cam3_ok = self.controller.cam.check_cam3(timeout)
         return cam1_ok, cam2_ok, cam3_ok
+    
+    def get_cams(self, ids):
+        assert len(ids)>0 and len(ids)<=3
+        frames = []
+        for cam_id in ids:
+            if cam_id == 0:
+                frame1 = self.controller.cam.get_cam1_data()
+                frames.append(frame1)
+            elif cam_id == 1:
+                frame2 = self.controller.cam.get_cam2_data()
+                frames.append(frame2)
+            elif cam_id == 2:
+                frame3 = self.controller.cam.get_cam3_data()
+                frames.append(frame3)
+        assert len(frames) == len(ids), "get frames failed."
+        return frames

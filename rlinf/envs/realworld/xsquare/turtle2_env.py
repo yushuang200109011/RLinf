@@ -38,8 +38,8 @@ from rlinf.envs.realworld.xsquare.turtle2_robot_state import Turtle2RobotState
 
 @dataclass
 class Turtle2RobotConfig:
-    use_camera_ids: list[int] = field(default_factory=lambda: [2]) # [0, 1, 2]
-    use_arm_ids: list[int] = field(default_factory=lambda: [1])  # [0, 1]
+    use_camera_ids: list[int] = field(default_factory=lambda: [0, 2]) # [0, 1, 2]
+    use_arm_ids: list[int] = field(default_factory=lambda: [0, 1])  # [0, 1]
     
     is_dummy: bool = False
     use_dense_reward: bool = False
@@ -51,17 +51,19 @@ class Turtle2RobotConfig:
     target_ee_pose: np.ndarray = field(
         default_factory=lambda: np.array([[0, 0, 0, 0, 0, 0],[0.3, 0.0, 0.1, 0.0, 1, 0.0]])
     )
-    reset_ee_pose: np.ndarray = field(default_factory=lambda: np.zeros((2, 6)))
+    reset_ee_pose: np.ndarray = field(default_factory=lambda: np.array(
+        [[0.3, 0, 0.0, 0.2, 0, 0], [0.2, 0, 0.1, 0, 0.8, 0.0]]
+    ))
     
     max_num_steps: int = 100
     reward_threshold: np.ndarray = field(default_factory=lambda: np.zeros((2, 6)))
     action_scale: np.ndarray = field(
         default_factory=lambda: np.ones((2, 3))
     )  # [xyz move scale, orientation scale, gripper scale]
-    enable_random_reset: bool = False
+    enable_random_reset: bool = True
 
-    random_xy_range: float = 0.0
-    random_rz_range: float = 0.0  # np.pi / 6
+    random_xy_range: float = 0.05
+    random_rz_range: float = np.pi / 10
 
     # Robot parameters
     # Same as the position arrays: first 3 are position limits, last 3 are orientation limits
@@ -207,6 +209,8 @@ class Turtle2Env(gym.Env):
             right_arm_reset_pose.append(0.0)
         else:
             right_arm_reset_pose = [0, 0, 0, 0, 0, 0, 0]
+
+        print("going to reset:", left_arm_reset_pose, right_arm_reset_pose)
         
         self._controller.move_arm(left_arm_reset_pose, right_arm_reset_pose).wait()
 
@@ -216,11 +220,19 @@ class Turtle2Env(gym.Env):
             state = self._controller.get_state().wait()[0]
             left_pos = state.follow1_pos
             right_pos = state.follow2_pos
-            left_reach = np.linalg.norm(left_pos[:6] - self.config.reset_ee_pose[0]) < 0.01 if 0 in self.config.use_arm_ids else True
-            right_reach = np.linalg.norm(right_pos[:6] - self.config.reset_ee_pose[1]) < 0.01 if 1 in self.config.use_arm_ids else True
+            # print("current right pos:", right_pos)
+            left_reach = np.linalg.norm(left_pos[:6] - np.array(left_arm_reset_pose)[:6]) < 0.03 if 0 in self.config.use_arm_ids else True
+            right_reach = np.linalg.norm(right_pos[:6] - np.array(right_arm_reset_pose)[:6]) < 0.03 if 1 in self.config.use_arm_ids else True
+            # print("left err:", np.linalg.norm(left_pos[:6] - np.array(left_arm_reset_pose)[:6]))
+            # print("right err:", np.linalg.norm(right_pos[:6] - np.array(right_arm_reset_pose)[:6]))
+            # print("lr reach:", left_reach, right_reach)
             reach = left_reach and right_reach
             if time.time() - start_time > 10.0:
                 raise ValueError("Reset arms timeout.")
+            
+            time.sleep(0.1)
+        time.sleep(0.5)
+        return
     
     def _check_cameras(self):
         if self.config.is_dummy:
@@ -485,17 +497,7 @@ class Turtle2Env(gym.Env):
 
     def _get_observation(self) -> dict:
         if not self.config.is_dummy:
-            frames = []
-            for cam_id in self.config.use_camera_ids:
-                if cam_id == 0:
-                    frame1 = self._controller.controller.cam.get_cam1_data().wait()[0]
-                    frames.append(frame1)
-                elif cam_id == 1:
-                    frame2 = self._controller.controller.cam.get_cam2_data().wait()[0]
-                    frames.append(frame2)
-                elif cam_id == 2:
-                    frame3 = self._controller.controller.cam.get_cam3_data().wait()[0]
-                    frames.append(frame3)
+            frames = self._controller.get_cams(self.config.use_camera_ids).wait()[0]
             assert len(frames) == len(self.config.use_camera_ids), "get frames failed."
             tcp_pose = []
             if 0 in self.config.use_arm_ids:

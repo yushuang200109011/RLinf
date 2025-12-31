@@ -67,8 +67,8 @@ class Turtle2RobotConfig:
 
     # Robot parameters
     # Same as the position arrays: first 3 are position limits, last 3 are orientation limits
-    ee_pose_limit_min: np.ndarray = field(default_factory=lambda: np.zeros((2, 6)))
-    ee_pose_limit_max: np.ndarray = field(default_factory=lambda: np.zeros((2, 6)))
+    ee_pose_limit_min: np.ndarray = field(default_factory=lambda: np.full((2, 6), -np.inf))
+    ee_pose_limit_max: np.ndarray = field(default_factory=lambda: np.full((2, 6), np.inf))
     gripper_width_limit_min: float = 0.0
     gripper_width_limit_max: float = 5.0
     enforce_gripper_close: bool = True
@@ -284,26 +284,33 @@ class Turtle2Env(gym.Env):
 
         next_position1 = self._turtle2_state.follow1_pos.copy()
         next_position2 = self._turtle2_state.follow2_pos.copy()
-        next_position1[:3] = (
-            next_position1[:3] + xyz_delta[0] * self.config.action_scale[0]
-        )
-        next_position2[:3] = (
-            next_position2[:3] + xyz_delta[1] * self.config.action_scale[0]
-        )
+        
+        if 0 in self.config.use_arm_ids:
+            next_position1[:3] = (
+                next_position1[:3] + xyz_delta[0] * self.config.action_scale[0]
+            )
+        if 1 in self.config.use_arm_ids:
+            next_position2[:3] = (
+                next_position2[:3] + xyz_delta[-1] * self.config.action_scale[0]
+            )
 
         # deal with dual arms (rpy)
-        next_position1[3:6] = (next_position1[3:6] + action[0, 3:6] * self.config.action_scale[1])
-        next_position2[3:6] = (next_position2[3:6] + action[1, 3:6] * self.config.action_scale[1])
+        if 0 in self.config.use_arm_ids: 
+            next_position1[3:6] = (next_position1[3:6] + action[0, 3:6] * self.config.action_scale[1])
+        if 1 in self.config.use_arm_ids:
+            next_position2[3:6] = (next_position2[3:6] + action[-1, 3:6] * self.config.action_scale[1])
 
         if self.config.enforce_gripper_close:
             next_position1[6] = self.config.gripper_width_limit_min
             next_position2[6] = self.config.gripper_width_limit_min
         else:
-            next_position1[6] = action[0, 6]
-            next_position2[6] = action[1, 6]
+            if 0 in self.config.use_arm_ids:
+                next_position1[6] = action[0, 6]
+            if 1 in self.config.use_arm_ids:
+                next_position2[6] = action[-1, 6]
 
         # clip to safety box
-        next_position1 = self._clip_position_to_safety_box(next_position1)
+        next_position = self._clip_position_to_safety_box(next_position1)
         next_position2 = self._clip_position_to_safety_box(next_position2)
 
         if not self.config.is_dummy:

@@ -44,7 +44,7 @@ class Turtle2RobotConfig:
     is_dummy: bool = False
     use_dense_reward: bool = False
     step_frequency: float = 10.0  # Max number of steps per second
-    smooth_frequency: int = 50  # Frequency for smooth controller
+    smooth_frequency: int = 75  # Frequency for smooth controller
 
     # Positions are stored in eular angles (xyz for position, rzryrx for orientation)
     # It will be converted to quaternions internally
@@ -52,7 +52,7 @@ class Turtle2RobotConfig:
         default_factory=lambda: np.array([[0, 0, 0, 0, 0, 0],[0.0, 0.0, 0.15, 0.0, 1, 0.0]])
     )
     reset_ee_pose: np.ndarray = field(default_factory=lambda: np.array(
-        [[0.3, 0, 0.0, 0.2, 0, 0], [0.2, 0, 0.1, 0, 0.8, 0.0]]
+        [[0.3, 0, 0.0, 0.2, 0, 0], [0.1, 0, 0.1, 0, 0.8, 0.0]]
     ))
     
     max_num_steps: int = 100
@@ -60,7 +60,7 @@ class Turtle2RobotConfig:
     action_scale: np.ndarray = field(
         default_factory=lambda: np.ones(3)
     )  # [xyz move scale, orientation scale, gripper scale]
-    enable_random_reset: bool = True
+    enable_random_reset: bool = False
 
     random_xy_range: float = 0.05
     random_rz_range: float = np.pi / 10
@@ -222,8 +222,8 @@ class Turtle2Env(gym.Env):
             left_pos = state.follow1_pos
             right_pos = state.follow2_pos
             # print("current right pos:", right_pos)
-            left_reach = np.linalg.norm(left_pos[:6] - np.array(left_arm_reset_pose)[:6]) < 0.03 if 0 in self.config.use_arm_ids else True
-            right_reach = np.linalg.norm(right_pos[:6] - np.array(right_arm_reset_pose)[:6]) < 0.03 if 1 in self.config.use_arm_ids else True
+            left_reach = np.linalg.norm(left_pos[:6] - np.array(left_arm_reset_pose)[:6]) < 0.04 if 0 in self.config.use_arm_ids else True
+            right_reach = np.linalg.norm(right_pos[:6] - np.array(right_arm_reset_pose)[:6]) < 0.04 if 1 in self.config.use_arm_ids else True
             # print("left err:", np.linalg.norm(left_pos[:6] - np.array(left_arm_reset_pose)[:6]))
             # print("right err:", np.linalg.norm(right_pos[:6] - np.array(right_arm_reset_pose)[:6]))
             # print("lr reach:", left_reach, right_reach)
@@ -282,6 +282,7 @@ class Turtle2Env(gym.Env):
         action = action.reshape(-1, 7)
         xyz_delta = action[:, :3]
 
+        # self._turtle2_state = self._controller.get_state().wait()[0]
         next_position1 = self._turtle2_state.follow1_pos.copy()
         next_position2 = self._turtle2_state.follow2_pos.copy()
         
@@ -289,10 +290,12 @@ class Turtle2Env(gym.Env):
             next_position1[:3] = (
                 next_position1[:3] + xyz_delta[0] * self.config.action_scale[0]
             )
+        print("next_position before:", next_position2[:3])
         if 1 in self.config.use_arm_ids:
             next_position2[:3] = (
                 next_position2[:3] + xyz_delta[-1] * self.config.action_scale[0]
             )
+        print("next_position after:", next_position2[:3])
 
         # deal with dual arms (rpy)
         if 0 in self.config.use_arm_ids: 
@@ -310,10 +313,11 @@ class Turtle2Env(gym.Env):
                 next_position2[6] = action[-1, 6]
 
         # clip to safety box
-        next_position = self._clip_position_to_safety_box(next_position1)
+        next_position1 = self._clip_position_to_safety_box(next_position1)
         next_position2 = self._clip_position_to_safety_box(next_position2)
 
         if not self.config.is_dummy:
+            print("pub action:", next_position2[:3])
             self._controller.move_arm(
                 next_position1.tolist(), next_position2.tolist()
             ).wait()
@@ -438,7 +442,7 @@ class Turtle2Env(gym.Env):
             obs = self._base_observation_space.sample()
             return obs
 
-
+# FIXME: should remove
 def main():
     env = Turtle2Env(
         config=Turtle2RobotConfig(),
@@ -457,15 +461,23 @@ def main():
             print(f"{key}: ", obs[key].shape)
     
     print("test step")
-    for i in range(50):
-        action = np.array([0.005, 0, 0.002, 0, 0, 0, 0])
+    for i in range(20):
+        action = np.array([0.01, 0, 0, 0, 0, 0, 0])
         obs, _, _, _, _ = env.step(action)
         print(f"first stage, step {i}:", obs["state"]["tcp_pose"])
     
-    for i in range(50):
-        action = np.array([0.000, 0, -0.003, 0, 0, 0, i*0.5])
+    for i in range(20):
+        action = np.array([0.000, 0, -0.01, 0, 0, 0, 0.00])
         obs, _, _, _, _ = env.step(action)
         print(f"second stage, step {i}:", obs["state"]["tcp_pose"])
+
+    print("obs.keys(): ", obs.keys())
+    for key in obs.keys():
+        if isinstance(obs[key], dict):
+            for subkey in obs[key].keys():
+                print(f"{key}.{subkey}: ", obs[key][subkey].shape)
+        else:
+            print(f"{key}: ", obs[key].shape)
 
 
 if __name__ == "__main__":

@@ -83,9 +83,9 @@ class Turtle2SmoothController(Worker):
         self.right_arm_target = [0, 0, 0, 0, 0, 0, 0]
 
         # xyz, rpy, gripper
-        self.tol = [0.007, 0.02, 5] # m, rad, cm
-        self.xyz_speed = 0.8  # m/s
-        self.rpy_speed = 2.5  # rad/s
+        self.tol = [0.002, 0.005, 5] # m, rad, cm
+        self.xyz_speed = 1.0  # m/s
+        self.rpy_speed = 3.0  # rad/s
         self.freq = freq
 
         # FIXME: should move to roscontroller
@@ -141,7 +141,7 @@ class Turtle2SmoothController(Worker):
         errrpy2 = np.linalg.norm(currpy2 - targetrpy2)
         
         if errxyz1 < self.tol[0] and errxyz2 < self.tol[0] and errrpy1 < self.tol[1] and errrpy2 < self.tol[1]:
-            # print(f"[INFO] target reach! {errxyz1:.4f}, {errxyz2:.4f}, {errrpy1:.4f}, {errrpy2:.4f}")
+            print(f"[INFO] target reach! {errxyz1:.4f}, {errxyz2:.4f}, {errrpy1:.4f}, {errrpy2:.4f}")
             return
         else:
             # interpolate xyz

@@ -41,7 +41,7 @@ class Turtle2RobotConfig:
     use_camera_ids: list[int] = field(default_factory=lambda: [2]) # [0, 1, 2]
     use_arm_ids: list[int] = field(default_factory=lambda: [1])  # [0, 1]
     
-    is_dummy: bool = False
+    is_dummy: bool = True
     use_dense_reward: bool = False
     step_frequency: float = 10.0  # Max number of steps per second
     smooth_frequency: int = 75  # Frequency for smooth controller
@@ -134,14 +134,24 @@ class Turtle2Env(gym.Env):
 
     def _init_action_obs_spaces(self):
         """Initialize action and observation spaces, including arm safety box."""
-        self._xyz_safe_space = gym.spaces.Box(
-            low=self.config.ee_pose_limit_min[self.config.use_arm_ids, :3].flatten(),
-            high=self.config.ee_pose_limit_max[self.config.use_arm_ids, :3].flatten(),
+        self._xyz_safe_space1 = gym.spaces.Box(
+            low=self.config.ee_pose_limit_min[0, :3].flatten(),
+            high=self.config.ee_pose_limit_max[0, :3].flatten(),
             dtype=np.float64,
         )
-        self._rpy_safe_space = gym.spaces.Box(
-            low=self.config.ee_pose_limit_min[self.config.use_arm_ids, 3:].flatten(),
-            high=self.config.ee_pose_limit_max[self.config.use_arm_ids, 3:].flatten(),
+        self._rpy_safe_space1 = gym.spaces.Box(
+            low=self.config.ee_pose_limit_min[0, 3:].flatten(),
+            high=self.config.ee_pose_limit_max[0, 3:].flatten(),
+            dtype=np.float64,
+        )
+        self._xyz_safe_space2 = gym.spaces.Box(
+            low=self.config.ee_pose_limit_min[1, :3].flatten(),
+            high=self.config.ee_pose_limit_max[1, :3].flatten(),
+            dtype=np.float64,
+        )
+        self._rpy_safe_space2 = gym.spaces.Box(
+            low=self.config.ee_pose_limit_min[1, 3:].flatten(),
+            high=self.config.ee_pose_limit_max[1, 3:].flatten(),
             dtype=np.float64,
         )
         self.action_space = gym.spaces.Box(
@@ -149,7 +159,7 @@ class Turtle2Env(gym.Env):
             np.ones((len(self.config.use_arm_ids) * 7), dtype=np.float32),
         )
 
-        obs_dim_per_arm = 7  # xyz(3) + rpy(3) + gripper(1)
+        obs_dim_per_arm = 7  # xyz(3) + quat(4)
         self.observation_space = gym.spaces.Dict(
             {
                 "state": gym.spaces.Dict(
@@ -290,12 +300,12 @@ class Turtle2Env(gym.Env):
             next_position1[:3] = (
                 next_position1[:3] + xyz_delta[0] * self.config.action_scale[0]
             )
-        print("next_position before:", next_position2[:3])
+        # print("next_position before:", next_position2[:3])
         if 1 in self.config.use_arm_ids:
             next_position2[:3] = (
                 next_position2[:3] + xyz_delta[-1] * self.config.action_scale[0]
             )
-        print("next_position after:", next_position2[:3])
+        # print("next_position after:", next_position2[:3])
 
         # deal with dual arms (rpy)
         if 0 in self.config.use_arm_ids: 
@@ -313,8 +323,12 @@ class Turtle2Env(gym.Env):
                 next_position2[6] = action[-1, 6]
 
         # clip to safety box
-        next_position1 = self._clip_position_to_safety_box(next_position1)
-        next_position2 = self._clip_position_to_safety_box(next_position2)
+        # FIXME: check the clip
+        # next_position1 = self._clip_position_to_safety_box(next_position1)
+        # next_position2 = self._clip_position_to_safety_box(next_position2)
+        next_position = self._clip_position_to_safety_box(np.stack([next_position1, next_position2]))
+        next_position1 = next_position[0]
+        next_position2 = next_position[1]
 
         if not self.config.is_dummy:
             print("pub action:", next_position2[:3])
@@ -333,8 +347,7 @@ class Turtle2Env(gym.Env):
         else:
             self._turtle2_state = self._turtle2_state
         observation = self._get_observation()
-        # reward = self._calc_step_reward(observation, is_gripper_action_effective)
-        reward = 0
+        reward = self._calc_step_reward(observation)
         terminated = reward == 1
         truncated = self._num_steps >= self.config.max_num_steps
         return observation, reward, terminated, truncated, {}
@@ -346,37 +359,42 @@ class Turtle2Env(gym.Env):
     def _calc_step_reward(
         self,
         observation: dict[str, np.ndarray],
-        is_gripper_action_effective: bool = False,
     ) -> float:
         """Compute the reward for the current observation, namely the robot state and camera frames.
 
         Args:
             observation (Dict[str, np.ndarray]): The current observation from the environment.
-            is_gripper_action_effective (bool): Whether the gripper action was effective (i.e., the gripper state changed).
         """
         if not self.config.is_dummy:
             # Convert orientation to euler angles
-            euler_angles = np.abs(
-                R.from_quat(self._franka_state.tcp_pose[3:].copy()).as_euler("xyz")
-            )
-            position = np.hstack([self._franka_state.tcp_pose[:3], euler_angles])
-            target_delta = np.abs(position - self.config.target_ee_pose)
-            is_success = np.all(target_delta[:3] <= self.config.reward_threshold[:3])
+            position1 = self._turtle2_state.follow1_pos[0:6]
+            position2 = self._turtle2_state.follow2_pos[0:6]
+            delta1 = np.abs(position1 - self.config.target_ee_pose[0, 0:6])
+            delta2 = np.abs(position2 - self.config.target_ee_pose[1, 0:6])
+            
+            success1 = np.all(delta1 <= self.config.reward_threshold[:3]) if 0 in self.config.use_arm_ids else True
+            success2 = np.all(delta2 <= self.config.reward_threshold[:3]) if 1 in self.config.use_arm_ids else True
+            is_success = success1 and success2
+
             if is_success:
                 reward = 1.0
             else:
                 if self.config.use_dense_reward:
-                    reward = np.exp(-500 * np.sum(np.square(target_delta[:3])))
+                    delta1_sq = np.sum(np.square(delta1[0:6])) if 0 in self.config.use_arm_ids else 0.0
+                    delta2_sq = np.sum(np.square(delta2[0:6])) if 1 in self.config.use_arm_ids else 0.0
+                    reward = np.exp(-200 * (delta1_sq + delta2_sq))
                 else:
                     reward = 0.0
-                self._logger.debug(
-                    f"Does not meet success criteria. Target delta: {target_delta}, "
+                # self._logger.debug(
+                #     f"Does not meet success criteria. Target delta: {target_delta}, "
+                #     f"Success threshold: {self.config.reward_threshold}, "
+                #     f"Current reward={reward}",
+                # )
+                print(
+                    f"Does not meet success criteria. delta1: {delta1}, delta2: {delta2}"
                     f"Success threshold: {self.config.reward_threshold}, "
-                    f"Current reward={reward}",
                 )
-
-            if self.config.enable_gripper_penalty and is_gripper_action_effective:
-                reward -= self.config.gripper_penalty
+                print(f"Reward={reward}")
 
             return reward
         else:
@@ -400,18 +418,28 @@ class Turtle2Env(gym.Env):
 
     def _clip_position_to_safety_box(self, position: np.ndarray) -> np.ndarray:
         """Clip the position array to be within the safety box."""
-        position[:3] = np.clip(
-            position[:3], self._xyz_safe_space.low, self._xyz_safe_space.high
+        position[0, 0:3] = np.clip(
+            position[0, 0:3], self._xyz_safe_space1.low, self._xyz_safe_space1.high
         )
-        position[3:6] = np.clip(
-            position[3:6], self._rpy_safe_space.low, self._rpy_safe_space.high
+        position[0, 3:6] = np.clip(
+            position[0, 3:6], self._rpy_safe_space1.low, self._rpy_safe_space1.high
         )
-        position[6] = np.clip(
-            position[6],
+        position[0, 6] = np.clip(
+            position[0, 6],
+            self.config.gripper_width_limit_min,
+            self.config.gripper_width_limit_max,
+        )
+        position[1, 0:3] = np.clip(
+            position[1, 0:3], self._xyz_safe_space2.low, self._xyz_safe_space2.high
+        )
+        position[1, 3:6] = np.clip(position[1, 3:6], self._rpy_safe_space2.low, self._rpy_safe_space2.high)
+        position[1, 6] = np.clip(
+            position[1, 6],
             self.config.gripper_width_limit_min,
             self.config.gripper_width_limit_max,
         )
 
+        position = position.reshape(2, -1)
         return position
 
     def _get_observation(self) -> dict:
@@ -422,9 +450,17 @@ class Turtle2Env(gym.Env):
                 frames[i] = self._crop_frame(frames[i], (128, 128))
             tcp_pose = []
             if 0 in self.config.use_arm_ids:
-                tcp_pose.append(self._turtle2_state.follow1_pos)
+                tmp = np.zeros(7)
+                tmp[0:3] = self._turtle2_state.follow1_pos[0:3]
+                r1 = R.from_euler(self._turtle2_state.follow1_pos[3:6])
+                tmp[3:7] = r1.as_quat()
+                tcp_pose.append(tmp.copy())
             if 1 in self.config.use_arm_ids:
-                tcp_pose.append(self._turtle2_state.follow2_pos)
+                tmp = np.zeros(7)
+                tmp[0:3] = self._turtle2_state.follow2_pos[0:3]
+                r2 = R.from_euler(self._turtle2_state.follow2_pos[3:6])
+                tmp[3:7] = r2.as_quat()
+                tcp_pose.append(tmp.copy())
             tcp_pose = np.concatenate(tcp_pose, axis=0)
             state = {
                 "tcp_pose": tcp_pose,
@@ -441,44 +477,3 @@ class Turtle2Env(gym.Env):
         else:
             obs = self._base_observation_space.sample()
             return obs
-
-# FIXME: should remove
-def main():
-    env = Turtle2Env(
-        config=Turtle2RobotConfig(),
-        worker_info=None,
-        hardware_info=None,
-        env_idx=0,
-    )
-    obs, _ = env.reset()
-    done = False
-    print("obs.keys(): ", obs.keys())
-    for key in obs.keys():
-        if isinstance(obs[key], dict):
-            for subkey in obs[key].keys():
-                print(f"{key}.{subkey}: ", obs[key][subkey].shape)
-        else:
-            print(f"{key}: ", obs[key].shape)
-    
-    print("test step")
-    for i in range(20):
-        action = np.array([0.01, 0, 0, 0, 0, 0, 0])
-        obs, _, _, _, _ = env.step(action)
-        print(f"first stage, step {i}:", obs["state"]["tcp_pose"])
-    
-    for i in range(20):
-        action = np.array([0.000, 0, -0.01, 0, 0, 0, 0.00])
-        obs, _, _, _, _ = env.step(action)
-        print(f"second stage, step {i}:", obs["state"]["tcp_pose"])
-
-    print("obs.keys(): ", obs.keys())
-    for key in obs.keys():
-        if isinstance(obs[key], dict):
-            for subkey in obs[key].keys():
-                print(f"{key}.{subkey}: ", obs[key][subkey].shape)
-        else:
-            print(f"{key}: ", obs[key].shape)
-
-
-if __name__ == "__main__":
-    main()

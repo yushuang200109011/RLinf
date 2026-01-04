@@ -89,7 +89,7 @@ class RealWorldEnv(gym.Env):
             hardware_info=hardware_info,
             env_idx=env_idx,
         )
-        env = GripperCloseEnv(env)
+        # env = GripperCloseEnv(env)
         if not env.config.is_dummy and self.cfg.get("use_spacemouse", True):
             env = SpacemouseIntervention(env)
         env = RelativeFrame(env)

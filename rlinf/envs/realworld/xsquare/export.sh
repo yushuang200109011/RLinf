@@ -1,0 +1,1 @@
+export PYTHONPATH="/root/RLinf-main:/root/RLinf-main/rlinf/envs/realworld/xsquare/basics:$PYTHONPATH"

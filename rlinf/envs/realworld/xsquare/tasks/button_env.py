@@ -34,7 +34,7 @@ class ButtonEnvConfig(Turtle2RobotConfig):
             [[0.0, 0.0, self.random_z_range_high, 0.0, 0.0, 0.0], [0.0, 0.0, self.random_z_range_high, 0.0, 0.0, 0.0]]
         )
         self.reward_threshold = np.array([0.01, 0.01, 0.01, 0.15, 0.15, 0.15])
-        self.action_scale = np.array([0.02, 0.1, 0.0]) # remain the gripper close
+        self.action_scale = np.array([0.01, 0.05, 0.0]) # remain the gripper close
 
         self.ee_pose_limit_min = self.target_ee_pose.copy()
         self.ee_pose_limit_min[:, 0] -= self.random_xy_range

@@ -185,6 +185,13 @@ class Turtle2Env(gym.Env):
         if self.config.is_dummy:
             return
         
+        print("pre-reset")
+        self._controller.move_arm([0.2, 0, 0.1, 0, 0, 0, 0], [0.2, 0, 0.1, 0, 0, 0, 0]).wait()
+
+        time.sleep(2.0)
+        # print("in reset: xyrange:", self.config.random_xy_range, ", rzrange:", self.config.random_rz_range)
+        # print("reset_ee_pos2", self.config.reset_ee_pose[1])
+        
         if self.config.enable_random_reset:
             random_xy1 = np.random.uniform(
                 -self.config.random_xy_range, self.config.random_xy_range, (2,)
@@ -205,7 +212,7 @@ class Turtle2Env(gym.Env):
             random_euler2 = np.zeros(3)
         
         if 0 in self.config.use_arm_ids:
-            left_arm_reset_pose = self.config.reset_ee_pose[0]
+            left_arm_reset_pose = self.config.reset_ee_pose[0].copy()
             left_arm_reset_pose[:2] += random_xy1
             left_arm_reset_pose[3:6] += random_euler1
             left_arm_reset_pose = left_arm_reset_pose.tolist()
@@ -213,7 +220,7 @@ class Turtle2Env(gym.Env):
         else:
             left_arm_reset_pose = [0, 0, 0, 0, 0, 0, 0]
         if 1 in self.config.use_arm_ids:
-            right_arm_reset_pose = self.config.reset_ee_pose[1]
+            right_arm_reset_pose = self.config.reset_ee_pose[1].copy()
             right_arm_reset_pose[:2] += random_xy2
             right_arm_reset_pose[3:6] += random_euler2
             right_arm_reset_pose = right_arm_reset_pose.tolist()
@@ -239,7 +246,7 @@ class Turtle2Env(gym.Env):
             # print("lr reach:", left_reach, right_reach)
             reach = left_reach and right_reach
             if time.time() - start_time > 10.0:
-                raise ValueError("Reset arms timeout.")
+                raise ValueError("Reset arms timeout, lefterr:", np.linalg.norm(left_pos[:6] - np.array(left_arm_reset_pose)[:6]), " ; righterr:", np.linalg.norm(right_pos[:6] - np.array(right_arm_reset_pose)[:6]))
             
             time.sleep(0.1)
         time.sleep(0.5)
@@ -331,7 +338,7 @@ class Turtle2Env(gym.Env):
         next_position2 = next_position[1]
 
         if not self.config.is_dummy:
-            print("pub action:", next_position2[:3])
+            # print("pub action:", next_position2[:3])
             self._controller.move_arm(
                 next_position1.tolist(), next_position2.tolist()
             ).wait()
@@ -372,8 +379,8 @@ class Turtle2Env(gym.Env):
             delta1 = np.abs(position1 - self.config.target_ee_pose[0, 0:6])
             delta2 = np.abs(position2 - self.config.target_ee_pose[1, 0:6])
             
-            success1 = np.all(delta1 <= self.config.reward_threshold[:3]) if 0 in self.config.use_arm_ids else True
-            success2 = np.all(delta2 <= self.config.reward_threshold[:3]) if 1 in self.config.use_arm_ids else True
+            success1 = np.all(delta1 <= self.config.reward_threshold) if 0 in self.config.use_arm_ids else True
+            success2 = np.all(delta2 <= self.config.reward_threshold) if 1 in self.config.use_arm_ids else True
             is_success = success1 and success2
 
             if is_success:
@@ -452,13 +459,13 @@ class Turtle2Env(gym.Env):
             if 0 in self.config.use_arm_ids:
                 tmp = np.zeros(7)
                 tmp[0:3] = self._turtle2_state.follow1_pos[0:3]
-                r1 = R.from_euler(self._turtle2_state.follow1_pos[3:6])
+                r1 = R.from_euler("xyz", self._turtle2_state.follow1_pos[3:6])
                 tmp[3:7] = r1.as_quat()
                 tcp_pose.append(tmp.copy())
             if 1 in self.config.use_arm_ids:
                 tmp = np.zeros(7)
                 tmp[0:3] = self._turtle2_state.follow2_pos[0:3]
-                r2 = R.from_euler(self._turtle2_state.follow2_pos[3:6])
+                r2 = R.from_euler("xyz", self._turtle2_state.follow2_pos[3:6])
                 tmp[3:7] = r2.as_quat()
                 tcp_pose.append(tmp.copy())
             tcp_pose = np.concatenate(tcp_pose, axis=0)

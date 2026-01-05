@@ -174,9 +174,9 @@ class Turtle2SmoothController(Worker):
         assert isinstance(right_arm_target, list) and len(right_arm_target) ==7, "right_arm_target should be a list of length 7"
         self.left_arm_target = left_arm_target
         self.right_arm_target = right_arm_target
-        print("Set new target:")
-        print(self.left_arm_target)
-        print(self.right_arm_target)
+        # print("Set new target:")
+        # print(self.left_arm_target)
+        # print(self.right_arm_target)
 
     def reset_arms(self):
         self.left_arm_target = [0, 0, 0, 0, 0, 0, 0]

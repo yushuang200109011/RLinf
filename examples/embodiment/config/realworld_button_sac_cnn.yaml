@@ -107,7 +107,7 @@ env:
     override_cfg:
       is_dummy: False
       use_dense_reward: True
-      target_ee_pose: [[0, 0, 0, 0, 0, 0], [0.29, 0.06, -0.1, 0.0, 0.8, 0.4]]
+      target_ee_pose: [[0, 0, 0, 0, 0, 0], [0.29, 0.24, -0.06, 0.0, 1.0, 0.7]]
       random_xy_range: 0.06
       random_z_range_low: 0.0
       random_z_range_high: 0.1

@@ -91,7 +91,8 @@ class MultiNodeGroupResolver:
         """
         if global_hw_rank not in self._rank_to_group:
             raise ValueError(
-                f"Hardware rank {global_hw_rank} is out of range for node groups {[ng.label for ng in self._node_groups]}. Must be within (0-{self._total_hardware_count - 1})"
+                f"Hardware rank {global_hw_rank} is out of range for node groups {[ng.label for ng in self._node_groups]}"
+                f"Must be within (0-{self._total_hardware_count - 1})"
             )
         group_idx, local_hw_rank = self._rank_to_group[global_hw_rank]
         node_group = self._node_groups[group_idx]
@@ -101,7 +102,8 @@ class MultiNodeGroupResolver:
         """Get the node group for a global hardware rank, i.e., the rank in the selected node groups."""
         if global_hw_rank not in self._rank_to_group:
             raise ValueError(
-                f"Global hardware rank {global_hw_rank} is out of range for node groups {[ng.label for ng in self._node_groups]}. Must be within (0-{self._total_hardware_count - 1})"
+                f"Global hardware rank {global_hw_rank} is out of range for node groups {[ng.label for ng in self._node_groups]}"
+                f"Must be within (0-{self._total_hardware_count - 1})"
             )
         group_idx, _ = self._rank_to_group[global_hw_rank]
         return self._node_groups[group_idx]
@@ -292,7 +294,7 @@ class ComponentPlacement:
 
       Fancier syntax mixing the two formats is also supported, e.g., 0-1:0-3,3-5,7-10:7-14, which means process 0-3 will be evenly assigned to resource ranks 0-1, process 4-6 will be assigned to resource ranks 3-5 (implicitly inferred by the scheduler) respectively, and process 7-14 will be evenly assigned to resource ranks 7-10. Note that even if the process ranks are not specified, they are assumed to be continuous from 0 to N-1, where N is the total number of processes. Failure to follow this rule will raise an assertion error.
 
-    - For the second format, the `node_group` label is the label defined in cluster.node_groups.label, which is optional. It can be either a single string (single node group) or a comma-separated string/list (multiple node groups, e.g., ``node_group: "a800,4090"``). If not specified, all nodes in the cluster are used. A `node` label is reserved by the scheduler for allocating on node ranks only (no accelerators or other hardware).
+    - For the second format, the `node_group` label is the label defined in cluster.node_groups.label, which is optional. It can be either a single string (single node group) or a comma-separated string/list (multiple node groups, e.g., ``node_group: "a800,4090"`` or ``node_group: [a800, 4090]``). If not specified, all nodes in the cluster are used. A `node` label is reserved by the scheduler for allocating on node ranks only (no accelerators or other hardware).
 
       When multiple node groups are specified, hardware ranks span across all groups in order, starting from 0. For example, if group "a800" has 8 GPUs (ranks 0-7) and group "4090" has 8 GPUs (ranks 0-7 within that group), then in the composite placement, hardware ranks 0-7 belong to "a800" and ranks 8-15 belong to "4090". Note that hardware ranks within a single process must all be of the same hardware type and on the same node.
     """
@@ -438,9 +440,6 @@ class ComponentPlacement:
 
         total_hw_count = resolver.hardware_resource_count
         hw_types = resolver.hardware_types
-        hw_type_str = "Node"
-        if hw_types is not None and isinstance(hw_types, list):
-            hw_type_str = ", ".join(hw_types)
 
         rank_map_parts = rank_map_str.strip().split(",")
         for rank_map_part in rank_map_parts:
@@ -458,7 +457,7 @@ class ComponentPlacement:
                 resource_ranks = parse_rank_config(
                     resource_ranks_str,
                     list(range(total_hw_count)),
-                    hw_type_str,
+                    hw_types,
                 )
             except AssertionError as e:
                 raise AssertionError(

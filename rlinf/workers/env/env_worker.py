@@ -14,10 +14,11 @@
 
 from collections import defaultdict
 from typing import Any
+import copy
 
 import numpy as np
 import torch
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 from rlinf.data.embodied_io_struct import EnvOutput
 from rlinf.envs import get_env_cls
@@ -67,15 +68,54 @@ class EnvWorker(Worker):
                 self.cfg.env.eval.total_num_envs // self._world_size // self.stage_num
             )
 
+    def update_cfg(self, target_train_config, target_eval_config):
+        # train env
+        train_override_cfgs = self.cfg.env.train.get("override_cfgs", None)
+        if train_override_cfgs is not None and target_train_config is not None:
+            general_train_override_cfg = OmegaConf.to_container(
+                self.cfg.env.train.get("override_cfg", OmegaConf.create({})), resolve=True
+            )
+            override_cfg = OmegaConf.to_container(
+                train_override_cfgs[self._rank], resolve=True
+            ).copy()
+            override_cfg.update(general_train_override_cfg)
+            setattr(target_train_config, "override_cfg", override_cfg)
+
+        eval_override_cfgs = self.cfg.env.eval.get("override_cfgs", None)
+        if eval_override_cfgs is not None and target_eval_config is not None:
+            general_eval_override_cfg = OmegaConf.to_container(
+                self.cfg.env.eval.get("override_cfg", OmegaConf.create({})), resolve=True
+            )
+            eval_override_cfg = OmegaConf.to_container(
+                eval_override_cfgs[self._rank], resolve=True
+            ).copy()
+            eval_override_cfg.update(general_eval_override_cfg)
+            setattr(target_eval_config, "override_cfg", eval_override_cfg)
+        return target_train_config, target_eval_config
+
+
     def init_worker(self):
         self.enable_offload = self.cfg.env.enable_offload
 
-        train_env_cls = get_env_cls(
-            self.cfg.env.train.env_type, self.cfg.env.train, self.enable_offload
-        )
-        eval_env_cls = get_env_cls(
-            self.cfg.env.eval.env_type, self.cfg.env.eval, self.enable_offload
-        )
+        if "heterogeneous" in self.cfg.env.train:
+            if str(self._rank) in self.cfg.env.train.heterogeneous.keys():
+                train_config = copy.deepcopy(self.cfg.env.train.heterogeneous[str(self._rank)])
+            else: 
+                train_config = copy.deepcopy(self.cfg.env.train)
+        else: 
+            train_config = copy.deepcopy(self.cfg.env.train)
+
+        if "heterogeneous" in self.cfg.env.eval:
+            if str(self._rank) in self.cfg.env.eval.heterogeneous.keys():
+                eval_config = copy.deepcopy(self.cfg.env.eval.heterogeneous[str(self._rank)])
+            else: 
+                eval_config = copy.deepcopy(self.cfg.env.eval)
+        else: 
+            eval_config = copy.deepcopy(self.cfg.env.eval)
+        
+        train_config, eval_config = self.update_cfg(train_config, eval_config)
+        train_env_cls = get_env_cls(train_config.env_type, train_config, self.enable_offload)
+        eval_env_cls = get_env_cls(eval_config.env_type, eval_config, self.enable_offload)
 
         # This is a barrier to ensure all envs' initial setup upon import is done
         # Essential for RealWorld env to ensure initial ROS node setup is done
@@ -88,7 +128,7 @@ class EnvWorker(Worker):
             for stage_id in range(self.stage_num):
                 self.env_list.append(
                     EnvManager(
-                        self.cfg.env.train,
+                        train_config,
                         rank=self._rank,
                         num_envs=self.train_num_envs_per_stage,
                         seed_offset=self._rank * self.stage_num + stage_id,
@@ -101,7 +141,7 @@ class EnvWorker(Worker):
             for stage_id in range(self.stage_num):
                 self.eval_env_list.append(
                     EnvManager(
-                        self.cfg.env.eval,
+                        eval_config,
                         rank=self._rank,
                         num_envs=self.eval_num_envs_per_stage,
                         seed_offset=self._rank * self.stage_num + stage_id,

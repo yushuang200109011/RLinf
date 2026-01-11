@@ -23,3 +23,5 @@ init_params:
   id: "PegInsertionEnv-v1"
   num_envs: null
 
+override_cfg: null
+

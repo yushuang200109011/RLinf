@@ -43,6 +43,7 @@ class FrankaRobotConfig:
     enable_camera_player: bool = True
 
     is_dummy: bool = False
+    only_pos: bool = False
     use_dense_reward: bool = False
     step_frequency: float = 10.0  # Max number of steps per second
 
@@ -345,6 +346,12 @@ class FrankaEnv(gym.Env):
                         "tcp_force": gym.spaces.Box(-np.inf, np.inf, shape=(3,)),
                         "tcp_torque": gym.spaces.Box(-np.inf, np.inf, shape=(3,)),
                     }
+                ) if not self.config.only_pos else gym.spaces.Dict(
+                    {
+                        "tcp_pose": gym.spaces.Box(
+                            -np.inf, np.inf, shape=(obs_tcp_pose_dim,)
+                        ),
+                    }
                 ),
                 "frames": gym.spaces.Dict(
                     {
@@ -512,6 +519,8 @@ class FrankaEnv(gym.Env):
                 ),
                 "tcp_force": self._franka_state.tcp_force,
                 "tcp_torque": self._franka_state.tcp_torque,
+            } if not self.config.only_pos else {
+                "tcp_pose": self._franka_state.tcp_pose,
             }
             observation = {
                 "state": state,
@@ -526,7 +535,8 @@ class FrankaEnv(gym.Env):
         self.adjoint_matrix = construct_adjoint_matrix(self._franka_state.tcp_pose)
         adjoint_inv = np.linalg.inv(self.adjoint_matrix)
 
-        state["tcp_vel"] = adjoint_inv @ state["tcp_vel"]
+        if "tcp_vel" in state.keys():
+            state["tcp_vel"] = adjoint_inv @ state["tcp_vel"]
 
         T_b_o = construct_homogeneous_matrix(self._franka_state.tcp_pose)
         T_r_o = self.T_b_r_inv @ T_b_o

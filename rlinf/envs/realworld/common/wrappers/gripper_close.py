@@ -25,7 +25,7 @@ class GripperCloseEnv(gym.ActionWrapper):
     def __init__(self, env):
         super().__init__(env)
         ub = self.env.action_space
-        assert ub.shape == (7,)
+        assert ub.shape == (7,), "only support 7-dim action space"
         self.action_space = Box(ub.low[:6], ub.high[:6])
 
     def action(self, action: np.ndarray) -> np.ndarray:

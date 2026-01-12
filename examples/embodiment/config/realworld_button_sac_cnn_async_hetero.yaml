@@ -1,6 +1,8 @@
 defaults:
   - env/realworld_button_xsquare@env.train
   - env/realworld_button_xsquare@env.eval
+  - env/realworld_peg_insertion@env.train.heterogeneous.1
+  - env/realworld_peg_insertion@env.eval.heterogeneous.1
   - model/cnn_policy@actor.model
   - training_backend/fsdp@actor.fsdp_config
   - override hydra/job_logging: stdout
@@ -13,19 +15,19 @@ hydra:
     - file://${oc.env:EMBODIED_PATH}/config/
 
 cluster:
-  num_nodes: 2
+  num_nodes: 3
   component_placement:
     actor:
-      node_group: "4090"
+      node_group: train
       placement: 0-0
     env:
-      node_group: turtle2
-      placement: 0
+      node_group: turtle2, franka
+      placement: 0-1
     rollout:
-      node_group: "4090"
-      placement: 0-0
+      node_group: train
+      placement: 0:0-1
   node_groups:
-    - label: "4090"
+    - label: train
       node_ranks: 0-0
     - label: turtle2
       node_ranks: 1-1
@@ -33,6 +35,13 @@ cluster:
         type: Turtle2
         configs:
           - node_rank: 1
+    - label: franka
+      node_ranks: 2-2
+      hardware:
+        type: Franka
+        configs:
+          - node_rank: 2
+            robot_ip: 192.168.1.2
 
 runner:
   task_type: embodied
@@ -97,16 +106,18 @@ env:
   enable_offload: False
 
   train:
-    total_num_envs: 1
+    total_num_envs: 2
     override_cfg:
       is_dummy: False
       use_dense_reward: True
-      target_ee_pose: [[0, 0, 0, 0, 0, 0], [0.29, 0.24, -0.06, 0.0, 1.0, 0.7]]
       random_xy_range: 0.06
       random_z_range_low: 0.0
       random_z_range_high: 0.1
       random_rz_range: 0.15 # About np.pi/9
-      smooth_frequency: 50
+    override_cfgs:
+      - target_ee_pose: [[0, 0, 0, 0, 0, 0], [0.29, 0.24, -0.06, 0.0, 1.0, 0.7]]
+        smooth_frequency: 50
+      - target_ee_pose: [0.5832946, 0.08056653, 0.0952475, 3.13519678, 0.02826767, 0.50670682]
 
 rollout:
   group_name: "RolloutGroup"

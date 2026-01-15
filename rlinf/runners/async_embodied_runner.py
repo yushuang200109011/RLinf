@@ -21,7 +21,10 @@ from omegaconf.dictconfig import DictConfig
 from rlinf.runners.embodied_runner import EmbodiedRunner
 from rlinf.scheduler import Channel
 from rlinf.scheduler import WorkerGroupFuncResult as Handle
-from rlinf.utils.metric_utils import compute_evaluate_metrics
+from rlinf.utils.metric_utils import (
+    compute_env_metrics_per_env_worker,
+    compute_evaluate_metrics,
+)
 from rlinf.utils.runner_utils import check_progress
 
 if TYPE_CHECKING:
@@ -56,29 +59,14 @@ class AsyncEmbodiedRunner(EmbodiedRunner):
         try:
             result = self.env_metric_channel.get_nowait()
         except asyncio.QueueEmpty:
-            return {}
-
-        time_metrics = {}
-        env_metrics = {}
-        for key, value in result.items():
-            if key.startswith("time/"):
-                time_metrics[key] = value
-            else:
-                env_metrics[key] = value
-
+            return None
+        all_workers_env_metrics = compute_env_metrics_per_env_worker([result])
         env_metrics = compute_evaluate_metrics(
             [
                 env_metrics,
             ]
         )
-        return {**env_metrics, **time_metrics}
-
-    def get_rollout_metrics(self):
-        try:
-            result = self.rollout_metric_channel.get_nowait()
-        except asyncio.QueueEmpty:
-            return {}
-        return result
+        return all_workers_env_metrics, env_metrics
 
     def run(self):
         start_step = self.global_step
@@ -113,61 +101,32 @@ class AsyncEmbodiedRunner(EmbodiedRunner):
                     train_step += 1
                     self.update_rollout_weights()
 
-                    training_metrics = {
-                        f"train/{k}": v for k, v in actor_result[0].items()
-                    }
-
-                    run_val, save_model, _ = check_progress(
-                        self.global_step,
-                        self.max_steps,
-                        self.cfg.runner.val_check_interval,
-                        self.cfg.runner.save_interval,
-                        1.0,
-                        run_time_exceeded=False,
-                    )
-                    if save_model:
-                        self._save_checkpoint()
-                    eval_metrics = {}
-                    if run_val:
-                        with self.timer("eval"):
-                            eval_metrics = self.evaluate()
-                            eval_metrics = {
-                                f"eval/{k}": v for k, v in eval_metrics.items()
-                            }
-
-            if skip_step:
-                self.timer.consume_durations()
-                time.sleep(1.0)
-                continue
-
-            time_metrics = self.timer.consume_durations()
-            time_metrics = {f"time/{k}": v for k, v in time_metrics.items()}
-            actor_training_time_metrics = {
-                f"time/actor/{k}": v
-                for k, v in actor_training_handle.consume_durations().items()
-            }
-            time_metrics.update(actor_training_time_metrics)
-            env_metrics = self.get_env_metrics()
-            rollout_metrics = self.get_rollout_metrics()
-
-            self.metric_logger.log(time_metrics, train_step)
-            self.metric_logger.log(env_metrics, train_step)
-            self.metric_logger.log(rollout_metrics, train_step)
+            training_metrics = {f"train/{k}": v for k, v in actor_result[0].items()}
             self.metric_logger.log(training_metrics, train_step)
 
-            logging_metrics = time_metrics
-            logging_metrics.update(eval_metrics)
-            logging_metrics.update(env_metrics)
-            logging_metrics.update(rollout_metrics)
-            logging_metrics.update(training_metrics)
-
-            self.print_metrics_table_async(
-                train_step - 1,
+            env_metrics_result = self.get_env_metrics()
+            if env_metrics_result is not None:
+                all_workers_env_metrics, env_metrics = env_metrics_result
+                rollout_metrics = {f"env/{k}": v for k, v in env_metrics.items()}
+                env_worker_metrics = {
+                    f"env/worker_{rank_id}/{k}": v
+                    for rank_id, worker_env_metrics in all_workers_env_metrics.items()
+                    for k, v in worker_env_metrics.items()
+                }
+                self.metric_logger.log(rollout_metrics, train_step)
+                self.metric_logger.log(env_worker_metrics, train_step)
+            
+            self.global_step = train_step
+            _, save_model, _ = check_progress(
+                self.global_step,
                 self.max_steps,
-                start_time,
-                logging_metrics,
-                start_step,
+                self.cfg.runner.val_check_interval,
+                self.cfg.runner.save_interval,
+                1.0,
+                run_time_exceeded=False,
             )
+            if save_model:
+                self._save_checkpoint()
 
         self.env.stop().wait()
         self.rollout.stop().wait()

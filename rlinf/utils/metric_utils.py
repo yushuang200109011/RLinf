@@ -14,6 +14,8 @@
 
 import math
 import time
+from collections import defaultdict
+
 
 import torch
 import torch.distributed
@@ -51,6 +53,33 @@ def count_trajectories(metrics_dict):
         )
     else:
         raise TypeError(f"Unsupported tensor type: {type(first_tensor)}")
+
+
+def compute_env_metrics_per_env_worker(env_metrics_list):
+    """
+    List of evaluate metrics, list length stands for rollout process
+    """
+    all_workers_env_metrics = defaultdict(list)
+
+    for env_metric in env_metrics_list:
+        rank_id = env_metric.pop("rank_id")
+        all_workers_env_metrics[rank_id].append(env_metric)
+
+    all_workers_avg_env_metric = {}
+    for rank_id, worker_env_metrics in all_workers_env_metrics.items():
+        all_workers_avg_env_metric[rank_id] = {}
+        env_info_keys = worker_env_metrics[0].keys()
+        for env_info_key in env_info_keys:
+            all_workers_avg_env_metric[rank_id][env_info_key] = (
+                torch.cat(
+                    [eval_metrics[env_info_key] for eval_metrics in worker_env_metrics]
+                )
+                .float()
+                .mean()
+                .numpy()
+            )
+    return all_workers_avg_env_metric
+
 
 
 def compute_evaluate_metrics(eval_metrics_list):

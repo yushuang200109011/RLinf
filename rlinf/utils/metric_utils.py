@@ -13,6 +13,8 @@
 # limitations under the License.
 
 import math
+from collections import defaultdict
+
 import time
 from collections import defaultdict
 

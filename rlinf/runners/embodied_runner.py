@@ -26,7 +26,10 @@ from rlinf.utils.distributed import ScopedTimer
 from rlinf.utils.metric_logger import MetricLogger
 from rlinf.utils.metric_utils import (
     compute_env_metrics_per_env_worker,
+    (
+    compute_env_metrics_per_env_worker,
     compute_evaluate_metrics,
+),
 ), print_metrics_table
 from rlinf.utils.runner_utils import check_progress
 

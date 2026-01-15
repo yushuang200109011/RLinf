@@ -434,6 +434,8 @@ class EnvWorker(Worker):
 
         for key, value in env_metrics.items():
             env_metrics[key] = torch.cat(value, dim=0).contiguous().cpu()
+        
+        env_metrics["rank_id"] = self._rank
 
         return env_metrics
 

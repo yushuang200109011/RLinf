@@ -361,6 +361,8 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
             "observation/state": env_obs["states"],
             "tokenized_prompt": processed_obs["tokenized_prompt"],
             "tokenized_prompt_mask": processed_obs["tokenized_prompt_mask"],
+            "model_action": outputs["actions"],
+            "model_observation": processed_obs,
         }
         if env_obs["wrist_images"] is not None:
             forward_inputs["observation/wrist_image"] = env_obs["wrist_images"]

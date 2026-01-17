@@ -23,7 +23,7 @@ from rlinf.envs.realworld.xsquare.turtle2_smooth_controller import Turtle2Smooth
 
 
 def main():
-    controller = Turtle2SmoothController.launch_controller(freq = 75)
+    controller = Turtle2SmoothController.launch_controller(freq = 50)
     # controller = Turtle2SmoothController()
 
     start_time = time.time()
@@ -39,12 +39,12 @@ def main():
             elif cmd_str == "go":
                 controller.move_arm(
                     [0, 0, 0, 0, 0, 0, 0],
-                    [0.29, 0.24, -0.01, 0.0, 1.0, 0.7, 0.0],
+                    [0.27, 0.09, 0.06, 0.0, 1.0, 0.5, 0.0],
                 ).wait()
                 time.sleep(3.0)
                 controller.move_arm(
                     [0, 0, 0, 0, 0, 0, 0],
-                    [0.29, 0.24, -0.1, 0.0, 1.0, 0.7, 0.0],
+                    [0.27, 0.09, 0.02, 0.0, 1.0, 0.5, 0.0],
                 ).wait()
             else:
                 print(f"Unknown cmd: {cmd_str}")

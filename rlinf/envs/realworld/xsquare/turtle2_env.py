@@ -43,8 +43,8 @@ class Turtle2RobotConfig:
     
     is_dummy: bool = True
     use_dense_reward: bool = False
-    step_frequency: float = 5.0  # Max number of steps per second
-    smooth_frequency: int = 75  # Frequency for smooth controller
+    step_frequency: float = 10.0  # Max number of steps per second
+    smooth_frequency: int = 50  # Frequency for smooth controller
 
     # Positions are stored in eular angles (xyz for position, rzryrx for orientation)
     # It will be converted to quaternions internally

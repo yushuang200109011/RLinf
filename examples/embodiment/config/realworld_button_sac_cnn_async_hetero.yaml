@@ -73,8 +73,8 @@ algorithm:
   loss_agg_func: "token-mean"
   
   bootstrap_type: always
-  gamma: 0.8
-  tau: 0.01  # Soft update coefficient for target networks
+  gamma: 0.90
+  tau: 0.005  # Soft update coefficient for target networks
   auto_entropy_tuning: True  # Enable automatic entropy tuning
   alpha_type: softplus
   initial_alpha: 0.01  # Initial temperature value
@@ -83,7 +83,7 @@ algorithm:
   
   # Replay buffer settings
   replay_buffer_capacity: 20000
-  min_buffer_size: 1  # Minimum buffer size before training starts
+  min_buffer_size: 400  # Minimum buffer size before training starts
   target_update_freq: 1  # Frequency of target network updates
 
   # params for rollout
@@ -110,14 +110,14 @@ env:
     override_cfg:
       is_dummy: False
       use_dense_reward: True
-      random_xy_range: 0.06
+      random_xy_range: 0.05
       random_z_range_low: 0.0
       random_z_range_high: 0.1
       random_rz_range: 0.15 # About np.pi/9
     override_cfgs:
-      - target_ee_pose: [[0, 0, 0, 0, 0, 0], [0.27, 0.09, -0.00, 0.0, 1.0, 0.6]]
+      - target_ee_pose: [[0, 0, 0, 0, 0, 0], [0.27, 0.09, 0.02, 0.0, 1.0, 0.6]]
         smooth_frequency: 50
-      - target_ee_pose: [ 0.59331441, 0.0422782, -0.01164505, -3.10166281, 0.02789129, -0.02919028]
+      - target_ee_pose: [0.59671717, 0.04281476, -0.01197926, 3.140014, 0.02838012, 0.01497832]
         only_pos: True
 
 rollout:
@@ -135,8 +135,8 @@ actor:
   group_name: "ActorGroup"
   training_backend: "fsdp"
 
-  micro_batch_size: 1024
-  global_batch_size: 1024
+  micro_batch_size: 512
+  global_batch_size: 512
   seed: 1234
   enable_offload: False
 

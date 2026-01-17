@@ -12,6 +12,7 @@ import math
 # msg
 import os
 import rospy
+from std_msgs.msg import Float32
 from arm_control.msg import JointControl,JointInformation
 from arm_control.msg import PosCmd
 from geometry_msgs.msg import Twist,PoseStamped
@@ -69,12 +70,13 @@ class HeadController(ControllerBase):
     def __init__(self):
         self.rate = rospy.Rate(50)
         self.head_control_cli = rospy.ServiceProxy('/head/control', HeadControl)
+        self.head_control_pitch_pub = rospy.Publisher('/head/control/pitch', Float32, queue_size=10)
+        self.head_control_yaw_pub = rospy.Publisher('/head/control/yaw', Float32, queue_size=10)
         self.head_data = [0.0,0.0] # [pitch,yaw]
         # head_data 上下限
         self.head_upper = [np.pi/2, np.pi/2]
         self.head_lower = [-np.pi/2, -np.pi/2]
         self.head_data_sub = rospy.Subscriber('/head/pos', HeadInfo, self.head_data_callback)
-    
 
     def head_data_callback(self, data):
         ''' 头部数据回调函数
@@ -82,7 +84,7 @@ class HeadController(ControllerBase):
         '''
         self.head_data[0] = data.pitch
         self.head_data[1] = data.yaw
-    
+
 
     def check_cmd(self, cmd):
         ''' cmd = [pitch,yaw]
@@ -111,6 +113,7 @@ class HeadController(ControllerBase):
 
     def send_control(self, cmd):
         ''' 发送头部控制指令, cmd = [pitch,yaw]
+        TODO(marcuswu): 需要废弃 
         '''
         # 检查指令
         if not self.check_cmd(cmd):
@@ -122,6 +125,15 @@ class HeadController(ControllerBase):
         except rospy.ServiceException as e:
             rospy.logerr("Service call failed: %s" % e)
 
+    def send_control_pitch(self, pitch : float):
+        """ 发送头部俯仰控制指令
+        """
+        self.head_control_pitch_pub.publish(Float32(pitch))
+    
+    def send_control_yaw(self, yaw : float):
+        """ 发送头部偏航控制指令
+        """
+        self.head_control_yaw_pub.publish(Float32(yaw))
 
     def get_data(self):
         ''' 获取头部数据
@@ -610,8 +622,8 @@ class ArmsController(ControllerBase):
         self.slave2JointCur = [0.0,0.0,0.0,0.0,0.0,0.0,0.0]
         self.slave1JointPos = [0.0,0.0,0.0,0.0,0.0,0.0,0.0]
         self.slave2JointPos = [0.0,0.0,0.0,0.0,0.0,0.0,0.0]
-        self.endPosPub1 = rospy.Publisher('/follow_pos_cmd_1', PosCmd, queue_size=10)
-        self.endPosPub2 = rospy.Publisher('/follow_pos_cmd_2', PosCmd, queue_size=10)
+        self.endPosPub1 = rospy.Publisher('/follow_pos_cmd_1', PosCmd, queue_size=5)
+        self.endPosPub2 = rospy.Publisher('/follow_pos_cmd_2', PosCmd, queue_size=5)
         self.endPosSub1 = rospy.Subscriber('/follow1_pos_back', PosCmd, self.Slave1PosBack_callback)
         self.endPosSub2 = rospy.Subscriber('/follow2_pos_back', PosCmd, self.Slave2PosBack_callback)
         self.jointsSub1 = rospy.Subscriber('/joint_information', JointControl,
@@ -729,7 +741,7 @@ class ArmsController(ControllerBase):
         # 线性插值
         pass
     
-    def send_control_raw_trj(self, cmd_l, cmd_r,t_step=0.005):
+    def send_control_raw_trj(self, cmd_l : list, cmd_r : list, t_step=0.005):
         ''' 发送机械臂原始轨迹控制指令
         :param cmd_l&cmd_r: 机械臂原始轨迹控制指令 [[x,y,z,roll,pitch,yaw,gripper],...]
         :param t_step: 轨迹控制时间步长，单位为秒
@@ -749,13 +761,121 @@ class ArmsController(ControllerBase):
             self.send_control(cmd_l[i], cmd_r[i])
             time.sleep(t_step)
 
-    def send_control_pose_trj(self, is_async_: bool ,pose_trj_l, pose_trj_r, pos_method='linear', quaternion_interpolation_method="slerp" ,infer_time=0.5, t_step=0.005, interpolation_step=200):
+    def send_control_pose_trj_async(self, pose_trj_l : list, pose_trj_r : list, \
+            pos_method='linear', quaternion_interpolation_method="slerp", infer_time=0.5, t_step=0.005, interpolation_step=200):
+        """ 异步发送机械臂位置轨迹控制指令
+        :param pose_trj_l&pose_trj_r: 机械臂位置轨
+        :param pos_method: 位置插值方法，'linear' or 'toppra'
+        :param quaternion_interpolation_method: 四元数插值方法，'slerp' or 'squad'
+        :param infer_time: 推理时间，单位为秒
+        :param t_step: 轨迹控制时间步长，单位为秒
+        :param interpolation_step: 轨迹插值后的目标点数量
+        @ NOTE: 使用这个函数前需要先把异步线程跑起来。
+        """
+        if self.arm_action_thread is None:
+            raise RuntimeError("Please start the arm action thread first by calling start_arm_actions_thread()")
+        
+        pose_trj_l = np.array(pose_trj_l, dtype=np.float32)
+        pose_trj_r = np.array(pose_trj_r, dtype=np.float32)
+        if len(pose_trj_l) != len(pose_trj_r):
+            rospy.logerr("pose_trj_l and pose_trj_r must have the same length")
+            return
+        
+        current_end_pose1, current_end_pose2 = self.get_data()
+        nearest_index1 = self.trajectory_smooth.find_action_nearest_index(
+            current_end_pose1, pose_trj_l[:, :3])
+        nearest_index2 = self.trajectory_smooth.find_action_nearest_index(
+            current_end_pose2, pose_trj_r[:, :3])
+        
+        if len(pose_trj_l) - nearest_index1 <=1: nearest_index1 = len(pose_trj_l) - 2
+        if len(pose_trj_r) - nearest_index2 <= 1: nearest_index2 = len(pose_trj_r) - 2
+
+        if pos_method == 'linear':
+            # 线性规划
+            actions1 = self.trajectory_smooth.interpolates_tcp_actions(
+                pose_trj_l[nearest_index1 : ],
+                target_actions_num=interpolation_step,
+                quaternion_interpolation_method=quaternion_interpolation_method)
+            actions2 = self.trajectory_smooth.interpolates_tcp_actions(
+                pose_trj_r[nearest_index2 : ],
+                target_actions_num=interpolation_step,
+                quaternion_interpolation_method=quaternion_interpolation_method)
+        if pos_method == 'toppra':
+            nearest_index = min(nearest_index1, nearest_index2)
+            actions1, actions2 = (self.trajectory_smooth.interpolation_by_toppra(
+                pose_trj_l[nearest_index : ], pose_trj_r[nearest_index : ],quaternion_interpolation_method=quaternion_interpolation_method))
+        
+        # 计算在推理需要占用的步数
+        infer_step = int((1/ t_step) * (infer_time))
+        exit_step = len(actions1) - infer_step
+
+        if infer_step < 1:
+            rospy.logerr("infer_time is too small, infer_step must be greater than 1")
+            return
+        if exit_step < 1:
+            print("-" * 30)
+            exit_step = len(actions1) - 1
+
+        print(f"设置新的机械臂轨迹, 轨迹长度: {len(actions1)}, 请求推理的步数: {exit_step}, 推理时间: {infer_time}")
+        self.set_arm_actions(actions1, actions2, exit_step, t_step)
+        self.wait_arm_actions()
+
+
+    def send_control_pose_trj_sync(self, pose_trj_l : list, pose_trj_r :list,\
+             pos_method='linear', quaternion_interpolation_method="slerp" , t_step=0.005, interpolation_step=200):
+        """ 同步发送机械臂位置轨迹控制指令
+        :param pose_trj_l&pose_trj_r: 机械臂位置轨.迹控制指令 [[x,y,z,roll,pitch,yaw,gripper],...]
+        :param pos_method: 位置插值方法，'linear' or 'toppra'
+        :param quaternion_interpolation_method: 四元数插值方法，'slerp' or 'squad'
+        :param t_step: 轨迹控制时间步长，单位为秒
+        :param interpolation_step: 轨迹插值后的目标点数量
+        @TODO : 同步接口不存在停止信号的概念。
+        """
+        pose_trj_l = np.array(pose_trj_l, dtype=np.float32)
+        pose_trj_r = np.array(pose_trj_r, dtype=np.float32)
+        if len(pose_trj_l) != len(pose_trj_r):
+            rospy.logerr("pose_trj_l and pose_trj_r must have the same length")
+            return
+        
+        current_end_pose1, current_end_pose2 = self.get_data()
+        nearest_index1 = self.trajectory_smooth.find_action_nearest_index(
+            current_end_pose1, pose_trj_l[:, :3])
+        nearest_index2 = self.trajectory_smooth.find_action_nearest_index(
+            current_end_pose2, pose_trj_r[:, :3])
+        
+        if len(pose_trj_l) - nearest_index1 <=1: nearest_index1 = len(pose_trj_l) - 2
+        if len(pose_trj_r) - nearest_index2 <= 1: nearest_index2 = len(pose_trj_r) - 2
+
+        if pos_method == 'linear': # 线性规划
+            actions1 = self.trajectory_smooth.interpolates_tcp_actions(
+                pose_trj_l[nearest_index1 : ],
+                target_actions_num=interpolation_step,
+                quaternion_interpolation_method=quaternion_interpolation_method)
+            actions2 = self.trajectory_smooth.interpolates_tcp_actions(
+                pose_trj_r[nearest_index2 : ],
+                target_actions_num=interpolation_step,
+                quaternion_interpolation_method=quaternion_interpolation_method)
+        if pos_method == 'toppra': # toppra规划
+            nearest_index = min(nearest_index1, nearest_index2)
+            actions1, actions2 = (self.trajectory_smooth.interpolation_by_toppra(
+                pose_trj_l[nearest_index : ], pose_trj_r[nearest_index : ],quaternion_interpolation_method=quaternion_interpolation_method))
+
+        # 算法插值之后直接下发
+        for i in range(len(actions1)):
+            self.send_control(actions1[i], actions2[i])
+            time.sleep(t_step)
+
+    def send_control_pose_trj(self, is_async_: bool ,pose_trj_l, pose_trj_r, \
+            pos_method='linear', quaternion_interpolation_method="slerp" ,infer_time=0.5, t_step=0.005, interpolation_step=200):
         ''' 发送机械臂位置轨迹控制指令
+        :param is_async_: 是否异步发送轨迹，True为异步，False为同步
         :param pose_trj_l&pose_trj_r: 机械臂位置轨迹控制指令 [[x,y,z,roll,pitch,yaw,gripper],...]
         :param pos_method: 位置插值方法，'linear' or 'toppra'
         :param quaternion_interpolation_method: 四元数插值方法，'slerp' or 'squad'
         :param infer_time: 推理时间，单位为秒
-        @ todo: 寻找相邻点函数需要做进一步处理
+        :param t_step: 轨迹控制时间步长，单位为秒
+        :param interpolation_step: 轨迹插值后的目标点数量
+        @TODO: 这个方法 被拆成同步和异步两个函数了，约 1-2 个版本后废弃
         '''
         pose_trj_l = np.array(pose_trj_l, dtype=np.float32)
         pose_trj_r = np.array(pose_trj_r, dtype=np.float32)
@@ -795,8 +915,8 @@ class ArmsController(ControllerBase):
         
         # 计算在推理需要占用的步数
         infer_step = int((1/ t_step) * (infer_time))
-
         exit_step = len(actions1) - infer_step
+
         if infer_step < 1:
             rospy.logerr("infer_time is too small, infer_step must be greater than 1")
             return

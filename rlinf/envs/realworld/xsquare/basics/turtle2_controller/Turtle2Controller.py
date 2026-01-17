@@ -74,7 +74,19 @@ class Turtle2Controller(RobotController):
         ''' 发送头部控制指令
         :param cmd : 头部控制指令
         '''
-        self.head.send_control(cmd)
+        # self.head.send_control(cmd)
+        self.head.send_control_pitch(cmd[0])
+        self.head.send_control_yaw(cmd[1])
+        
+    def head_control_pitch(self, pitch : float):
+        """ 发送头部俯仰控制指令
+        """
+        self.head.send_control_pitch(pitch)
+    
+    def head_control_yaw(self, yaw : float):
+        """ 发送头部偏航控制指令
+        """
+        self.head.send_control_yaw(yaw)
 
     def head_data(self):
         ''' 获取头部数据
@@ -327,12 +339,45 @@ class MovingController(RobotController):
         '''
         self.arms.send_control(cmd_l,cmd_r)
 
-    def arms_control_pose_trj(self, is_async_: bool, pose_trj_l, pose_trj_r, pos_method='linear', quaternion_interpolation_method="slerp" ,infer_time=0.05, step_time=0.005, interpolation_step=200):
+    def arms_control_pose_trj(self, is_async_: bool, pose_trj_l, pose_trj_r, \
+                pos_method='linear', quaternion_interpolation_method="slerp" ,infer_time=0.05, step_time=0.005, interpolation_step=200):
         ''' 发送机械臂位置轨迹控制指令
         :param pose_trj_l&pose_trj_r: 机械臂位置轨迹控制指令 [[x,y,z,roll,pitch,yaw,gripper],...]
+        :param pos_method: 轨迹插值方法,可选'linear'或'toppra'
+        :param quaternion_interpolation_method: 四元数插值方法,可选'slerp'或'squad'
+        :param infer_time: 推理时间，单位为秒
+        :param step_time: 轨迹控制时间步长，单位为秒
+        :param interpolation_step: 轨迹插值后的目标点数量
         :method : 轨迹插值方法,可选'slerp'或'toppra'
+        @TODO: 这个方法 被拆成同步和异步两个函数了，约 1-2 个版本后废弃 
         '''
         self.arms.send_control_pose_trj(is_async_, pose_trj_l, pose_trj_r, pos_method, quaternion_interpolation_method, infer_time, step_time, interpolation_step)
+
+    def arms_control_pose_trj_sync(self, pose_trj_l, pose_trj_r, \
+                pos_method='linear', quaternion_interpolation_method="slerp", t_step=0.005, interpolation_step=200):
+        ''' 发送机械臂位置轨迹控制指令(同步版本)
+        :param pose_trj_l&pose_trj_r: 机械臂位置轨迹控制指令 [[x,y,z,roll,pitch,yaw,gripper],...]
+        :param pos_method: 轨迹插值方法,可选'linear'或'toppra'
+        :param quaternion_interpolation_method: 四元数插值方法,可选'slerp'或'squad'
+        :param t_step: 轨迹控制时间步长，单位为秒
+        :param interpolation_step: 轨迹插值后的目标点数量
+        :method : 轨迹插值方法,可选'slerp'或'toppra'
+        '''
+        self.arms.send_control_pose_trj_sync(pose_trj_l, pose_trj_r, pos_method, quaternion_interpolation_method, t_step, interpolation_step)
+    
+    def arms_control_pose_trj_async(self, pose_trj_l, pose_trj_r, \
+                pos_method='linear', quaternion_interpolation_method="slerp" ,infer_time=0.05, t_step=0.005, interpolation_step=200):
+        ''' 发送机械臂位置轨迹控制指令(异步版本)
+        :param pose_trj_l&pose_trj_r: 机械臂位置轨迹控制指令 [[x,y,z,roll,pitch,yaw,gripper],...]
+        :param pos_method: 轨迹插值方法,可选'linear'或'toppra'
+        :param quaternion_interpolation_method: 四元数插值方法,可选'slerp'或'squad'
+        :param infer_time: 推理时间，单位为秒
+        :param t_step: 轨迹控制时间步长，单位为秒
+        :param interpolation_step: 轨迹插值后的目标点数量
+        :method : 轨迹插值方法,可选'slerp'或'toppra'
+        @ NOTE: 使用这个函数前需要先把异步线程跑起来。
+        '''
+        self.arms.send_control_pose_trj_async(pose_trj_l, pose_trj_r, pos_method, quaternion_interpolation_method, infer_time, t_step, interpolation_step)
 
     def arms_control_raw_trj(self,cmd_l, cmd_r,t_step=0.005):
         """ 发送机械臂原始轨迹控制指令
@@ -486,7 +531,9 @@ def handle_sigint(signum, frame):
 
 def robot_controller_access(registry_node :bool = True):
     # 获取ubuntu 环境变量
-    signal.signal(signal.SIGINT, handle_sigint)
+    import threading
+    if threading.current_thread() is threading.main_thread():
+        signal.signal(signal.SIGINT, handle_sigint)
     import os
     robot_type = os.environ.get('ROBOT_TYPE', 'TURTLE2')
     if robot_type == 'TURTLE2':

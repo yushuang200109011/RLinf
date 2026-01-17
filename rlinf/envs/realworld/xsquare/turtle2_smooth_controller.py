@@ -23,7 +23,7 @@ from turtle2_controller.Turtle2Controller import Turtle2Controller
 
 import json
 import socket
-import cv2
+import copy
 from cv_bridge import CvBridge
 import numpy as np
 import time
@@ -33,6 +33,9 @@ from rlinf.envs.realworld.common.ros import ROSController
 from rlinf.scheduler import Cluster, NodePlacementStrategy, Worker
 from rlinf.utils.logging import get_logger
 from .turtle2_robot_state import Turtle2RobotState
+
+import tracemalloc
+import gc
 
 
 class Turtle2SmoothController(Worker):
@@ -77,20 +80,28 @@ class Turtle2SmoothController(Worker):
         self._state = Turtle2RobotState()
 
         control_period = rospy.Duration(1/freq)
-        state_period = rospy.Duration(0.5/freq)
+        state_period = rospy.Duration(1 / 200.0)
 
         self.left_arm_target = [0, 0, 0, 0, 0, 0, 0]
         self.right_arm_target = [0, 0, 0, 0, 0, 0, 0]
 
+        self.last_expected_xyz1 = None
+        self.last_expected_xyz2 = None
+        self.last_expected_rpy1 = None
+        self.last_expected_rpy2 = None
+
         # xyz, rpy, gripper
         self.tol = [0.002, 0.005, 5] # m, rad, cm
-        self.xyz_speed = 1.0  # m/s
-        self.rpy_speed = 3.0  # rad/s
+        self.xyz_speed = 0.5  # m/s
+        self.rpy_speed = 1.5  # rad/s
         self.freq = freq
 
         # FIXME: should move to roscontroller
         rospy.Timer(control_period, self.smooth_action_callback)
         rospy.Timer(state_period, self.state_callback)
+
+        tracemalloc.start(15)
+        self.snapshot_base = tracemalloc.take_snapshot()
 
 
     def state_callback(self, event):
@@ -141,28 +152,44 @@ class Turtle2SmoothController(Worker):
         errrpy2 = np.linalg.norm(currpy2 - targetrpy2)
         
         if errxyz1 < self.tol[0] and errxyz2 < self.tol[0] and errrpy1 < self.tol[1] and errrpy2 < self.tol[1]:
-            print(f"[INFO] target reach! {errxyz1:.4f}, {errxyz2:.4f}, {errrpy1:.4f}, {errrpy2:.4f}")
+            # print(f"[INFO] target reach! {errxyz1:.4f}, {errxyz2:.4f}, {errrpy1:.4f}, {errrpy2:.4f}")
+            self.last_expected_xyz1 = curxyz1.copy()
+            self.last_expected_xyz2 = curxyz2.copy()
+            self.last_expected_rpy1 = currpy1.copy()
+            self.last_expected_rpy1 = currpy1.copy()
             return
         else:
             # interpolate xyz
-            dirxyz1 = (targetxyz1 - curxyz1) / (errxyz1 + 0.005)
-            dirxyz2 = (targetxyz2 - curxyz2) / (errxyz2 + 0.005)
+            curxyz1 = 0.5 * (curxyz1 + self.last_expected_xyz1) if self.last_expected_xyz1 is not None else curxyz1
+            curxyz2 = 0.5 * (curxyz2 + self.last_expected_xyz2) if self.last_expected_xyz2 is not None else curxyz2
+            currpy1 = 0.5 * (currpy1 + self.last_expected_rpy1) if self.last_expected_rpy1 is not None else currpy1
+            currpy2 = 0.5 * (currpy2 + self.last_expected_rpy2) if self.last_expected_rpy2 is not None else currpy2
+
+            dirxyz1 = (targetxyz1 - curxyz1) / (errxyz1 + 0.001)
+            dirxyz2 = (targetxyz2 - curxyz2) / (errxyz2 + 0.001)
             # print("dirxyz2:",dirxyz2)
             stepxyz1 = dirxyz1 * min(xyz_step, errxyz1)
             stepxyz2 = dirxyz2 * min(xyz_step, errxyz2)
             # print("stepxyz2:",stepxyz2)
             newxyz1 = curxyz1 + stepxyz1
+            self.last_expected_xyz1 = newxyz1.copy()
+
             newxyz2 = curxyz2 + stepxyz2
+            self.last_expected_xyz2 = newxyz2.copy()
             
             # interpolate rpy
-            dirrpy1 = (targetrpy1 - currpy1) / (errrpy1 + 0.005)
-            dirrpy2 = (targetrpy2 - currpy2) / (errrpy2 + 0.005)
+            dirrpy1 = (targetrpy1 - currpy1) / (errrpy1 + 0.001)
+            dirrpy2 = (targetrpy2 - currpy2) / (errrpy2 + 0.001)
             # print("dirrpy2:",dirrpy2)
             steprpy1 = dirrpy1 * min(rpy_step, errrpy1)
             steprpy2 = dirrpy2 * min(rpy_step, errrpy2)
             newrpy1 = currpy1 + steprpy1
+            self.last_expected_rpy1 = newrpy1.copy()
+
             newrpy2 = currpy2 + steprpy2
-            # print("steprpy2:",steprpy2)
+            # print("last_exp:", self.last_expected_rpy2, "; stp:", steprpy2)
+            self.last_expected_rpy2 = newrpy2.copy()
+
             newpos1 = [newxyz1[0], newxyz1[1], newxyz1[2], newrpy1[0], newrpy1[1], newrpy1[2], self.left_arm_target[6]]
             newpos2 = [newxyz2[0], newxyz2[1], newxyz2[2], newrpy2[0], newrpy2[1], newrpy2[2], self.right_arm_target[6]]
             # print("new pos:",newpos2)
@@ -177,6 +204,13 @@ class Turtle2SmoothController(Worker):
         # print("Set new target:")
         # print(self.left_arm_target)
         # print(self.right_arm_target)
+
+        snap_now = tracemalloc.take_snapshot()
+        top_stats = snap_now.compare_to(self.snapshot_base, 'lineno')
+        # print("check:")
+        # for stat in top_stats[:6]:
+        #     print(stat)
+        gc.collect()
 
     def reset_arms(self):
         self.left_arm_target = [0, 0, 0, 0, 0, 0, 0]

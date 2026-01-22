@@ -56,13 +56,26 @@ class AsyncEmbodiedDAGGERFSDPPolicy(EmbodiedDAGGERFSDPPolicy):
                 self.cfg.algorithm.get("min_buffer_size", 100) // self._world_size
             )
             current_buffer_size = len(self.replay_buffer)
-            if not (await self.replay_buffer.is_ready_async(min_buffer_size)):
+            self.log_on_first_rank(
+                f"Current replay buffer size: {current_buffer_size}, min_buffer_size: {min_buffer_size}"
+            )
+            # if not (await self.replay_buffer.is_ready_async(min_buffer_size)):
+            #     self.log_on_first_rank(
+            #         f"Replay buffer size {current_buffer_size} < {min_buffer_size}, skipping training. "
+            #         f"Buffer capacity: {self.replay_buffer.capacity if hasattr(self.replay_buffer, 'capacity') else 'N/A'}"
+            #     )
+            #     return False
+            is_ready_Local = await self.replay_buffer.is_ready_async(min_buffer_size)
+            is_ready_global = torch.tensor(int(is_ready_Local), device=self.device)
+            torch.distributed.all_reduce(is_ready_global, op=torch.distributed.ReduceOp.MIN)
+            is_ready_global = is_ready_global.item() > 0
+            if not is_ready_global:
                 self.log_on_first_rank(
                     f"Replay buffer size {current_buffer_size} < {min_buffer_size}, skipping training. "
                     f"Buffer capacity: {self.replay_buffer.capacity if hasattr(self.replay_buffer, 'capacity') else 'N/A'}"
                 )
                 return False
-            print(f"Training with {current_buffer_size} samples")
+            self.log_on_first_rank(f"Training with {current_buffer_size} samples")
             self.model.train()
             if hasattr(self.model, "gradient_checkpointing_disable"):
                 self.model.gradient_checkpointing_disable()
@@ -170,24 +183,6 @@ class AsyncEmbodiedDAGGERFSDPPolicy(EmbodiedDAGGERFSDPPolicy):
                         is_last_micro_batch=(idx + 1) == len(train_micro_batch_list),
                     )
 
-                    # Simple version: assume batch contains obs and action in correct format
-                    # Extract observation fields from batch (from forward_inputs)
-                    # These have keys like "observation/image", "observation/state", etc.
-                    """hzf
-                    obs_dict = {}
-                    obs_prefix_keys = [k for k in batch.keys() if k.startswith("observation/")]
-                    for key in obs_prefix_keys:
-                        obs_dict[key] = batch[key]
-                    # Also extract tokenized prompt fields if present
-                    if "tokenized_prompt" in batch:
-                        obs_dict["tokenized_prompt"] = batch["tokenized_prompt"]
-                    if "tokenized_prompt_mask" in batch:
-                        obs_dict["tokenized_prompt_mask"] = batch["tokenized_prompt_mask"]
-                    # Transform using model's input_transform to convert "observation/image" -> "image" etc.
-                    # This matches what predict_action_batch does internally
-                    processed_obs = self.model.input_transform(obs_dict, transpose=False)
-                    observation = _model.Observation.from_dict(processed_obs)
-                    """
                     if "model_observation" in batch:
                         observation = batch["model_observation"]
                         observation = _model.Observation.from_dict(observation)
@@ -222,30 +217,33 @@ class AsyncEmbodiedDAGGERFSDPPolicy(EmbodiedDAGGERFSDPPolicy):
                             losses = torch.tensor(
                                 losses, device=self.device, dtype=torch.float32
                             )
+                        losses = losses[:, : self.model.config.action_chunk, : self.model.config.action_env_dim]
                         loss = losses.mean()
 
                     total_loss += loss.item()
                     loss = loss / self.gradient_accumulation
-                    with backward_ctx:
-                        self.grad_scaler.scale(loss).backward()
+                    # with backward_ctx:
+                    #     self.grad_scaler.scale(loss).backward()
+                    loss.backward()
             # ========== END: Choose different loop based on data source ==========
 
             # Manual gradient sync (temporary fix)
-            torch.cuda.synchronize()
-            if torch.distributed.is_initialized():
-                all_grads = []
-                for name, param in self.model.named_parameters():
-                    if param.grad is not None:
-                        all_grads.append((name, param.grad))
-                process_group = getattr(self.model, "process_group", None)
-                for name, grad in all_grads:
-                    torch.distributed.all_reduce(
-                        grad, op=torch.distributed.ReduceOp.AVG, group=process_group
-                    )
-                process_group = getattr(self.model, "process_group", None)
-                torch.distributed.barrier(
-                    group=process_group, device_ids=[torch.cuda.current_device()]
-                )
+            # breakpoint()
+            # torch.cuda.synchronize()
+            # if torch.distributed.is_initialized():
+            #     all_grads = []
+            #     for name, param in self.model.named_parameters():
+            #         if param.grad is not None:
+            #             all_grads.append((name, param.grad))
+            #     process_group = getattr(self.model, "process_group", None)
+            #     for name, grad in all_grads:
+            #         torch.distributed.all_reduce(
+            #             grad, op=torch.distributed.ReduceOp.AVG, group=process_group
+            #         )
+            #     process_group = getattr(self.model, "process_group", None)
+            #     torch.distributed.barrier(
+            #         group=process_group, device_ids=[torch.cuda.current_device()]
+            #     )
 
             avg_loss = total_loss / self.gradient_accumulation
             grad_norm, lr_list = self.optimizer_step()

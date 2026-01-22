@@ -60,6 +60,8 @@ class EmbodiedDAGGERFSDPPolicy(EmbodiedFSDPActor):
             self.offload_param_and_grad()
             self.offload_optimizer()
         self._setup_rollout_weight_dst_ranks()
+        if self.cfg.actor.get("compile_model", False):
+            self.model = torch.compile(self.model, mode="default") # max-autotune-no-cudagraphs
 
     def setup_buffer(self):
         """Initialize replay buffer for DAgger."""

@@ -15,10 +15,8 @@ hydra:
 cluster:
   num_nodes: 1
   component_placement:
-    actor: 0-0
-    env: 1-1
-    rollout: 1-1
-
+    actor: 0-1
+    rollout, env: 2-3
 runner:
   task_type: embodied
   logger:
@@ -31,8 +29,8 @@ runner:
   max_steps: -1
   
   only_eval: False
-  val_check_interval: 10
-  save_interval: 50
+  val_check_interval: 15
+  save_interval: 4500000000
 
 algorithm:
   expert_intervention_rate: 0.99
@@ -44,13 +42,13 @@ algorithm:
   sampling_ratio: 0.0
 
   rollout_epoch: 5000
-  eval_rollout_epoch: 1
+  eval_rollout_epoch: 2
   
   update_epoch: 1
   group_size: 1
   
-  replay_buffer_capacity: 150000
-  min_buffer_size: 64
+  replay_buffer_capacity: 30000
+  min_buffer_size: 1024
   
   adv_type: gae
   loss_type: embodied_sac
@@ -112,11 +110,11 @@ rollout:
   pipeline_stage_num: 1
 
   model:
-    model_path: "/mnt/project_rlinf/chenkang/openpi-main/checkpoints/sft/pi0_libero/all_patch_3/10000"
+    model_path: "/home/ysa/dagger/ckpt/libero-sft"
     precision: ${actor.model.precision}
 
   expert_model:
-    model_path: "/mnt/project_rlinf/chenkang/openpi-main/checkpoints/sft/pi0_libero_130_fullshot/full_sft_pi0_libero_130_fullshot/30000"
+    model_path: "/home/ysa/dagger/ckpt/libero-final"
     precision: ${actor.expert_model.precision}
 
 actor:
@@ -124,13 +122,13 @@ actor:
   training_backend: "fsdp"
 
   micro_batch_size: 32
-  global_batch_size: 32
+  global_batch_size: 128
   seed: 1234
   enable_offload: False
 
   model:
     model_name: "openpi"
-    model_path: "/mnt/project_rlinf/chenkang/openpi-main/checkpoints/sft/pi0_libero/all_patch_3/10000"
+    model_path: "/home/ysa/dagger/ckpt/libero-sft"
     action_dim: 7
     
     precision: null
@@ -139,11 +137,13 @@ actor:
     openpi:
       config_name: "pi0_libero"
       detach_critic_input: True
-      train_expert_only: False
+      train_expert_only: True
+  
+  compile_model: True
 
   expert_model:
     model_name: "openpi"
-    model_path: "/mnt/project_rlinf/chenkang/openpi-main/checkpoints/sft/pi0_libero_130_fullshot/full_sft_pi0_libero_130_fullshot/30000"
+    model_path: "/home/ysa/dagger/ckpt/libero-final"
     action_dim: 7
     
     precision: null
@@ -151,24 +151,24 @@ actor:
     openpi:
       config_name: "pi0_libero"
       detach_critic_input: True
-      train_expert_only: False
+      train_expert_only: True
 
   optim:
-    lr: 2.5e-5
+    lr: 1e-5
     value_lr: 1.55e-4
     adam_beta1: 0.9
     adam_beta2: 0.95
     adam_eps: 1.0e-08
     weight_decay: 1.0e-10
-    clip_grad: 1.0
+    clip_grad: 5.0
     warmup_style: "cosine"  
-    lr_warmup_steps: 1000  
-    total_training_steps: 30000  # for lr scheduler cosine decay
+    lr_warmup_steps: 20
+    total_training_steps: 4000  # for lr scheduler cosine decay
 
   fsdp_config:
     strategy: "fsdp"
     sharding_strategy: "no_shard"
-    use_orig_params: False
+    use_orig_params: True
     mixed_precision:
       param_dtype: ${actor.model.precision}
       reduce_dtype: ${actor.model.precision}
@@ -180,4 +180,4 @@ reward:
 critic:
   use_critic_model: False
 
-initial_sft_data_path: "/mnt/project_rlinf/zefang/libero_data/libero"
+initial_sft_data_path: ""

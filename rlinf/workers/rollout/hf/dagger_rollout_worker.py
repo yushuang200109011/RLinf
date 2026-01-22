@@ -180,7 +180,7 @@ class DaggerRolloutWorker(Worker):
             SupportedModel.GR00T,
             SupportedModel.CNN_POLICY,
         ]:
-            kwargs = {"mode": mode}
+            kwargs = {"mode": "eval"}
 
         kwargs["return_obs"] = not hasattr(self.hf_model, "q_head")
 
@@ -188,31 +188,6 @@ class DaggerRolloutWorker(Worker):
         has_expert_model = hasattr(self, "expert_model") and self.expert_model is not None
         if mode == "train" and has_expert_model:
             use_expert = np.random.random() < self.beta
-        
-        """hzf
-        with torch.no_grad():
-            if use_expert and has_expert_model:
-                actions, result = self.expert_model.predict_action_batch(
-                    env_obs=env_obs,
-                    **kwargs,
-                )
-            else:
-                if mode == "train":
-                    actions, _ = self.hf_model.predict_action_batch(
-                        env_obs=env_obs,
-                        **kwargs,
-                    )
-
-                    _, result = self.expert_model.predict_action_batch(
-                        env_obs=env_obs,
-                        **kwargs,
-                    )
-                else:
-                    actions, result = self.hf_model.predict_action_batch(
-                        env_obs=env_obs,
-                        **kwargs,
-                    )
-        """
 
         with torch.no_grad():
             if use_expert and has_expert_model:
@@ -220,15 +195,30 @@ class DaggerRolloutWorker(Worker):
                     env_obs=env_obs,
                     **kwargs,
                 )
+                expert_actions = result["forward_inputs"]["model_action"].clone()
             else:
                 actions, result = self.hf_model.predict_action_batch(
                     env_obs=env_obs,
                     **kwargs,
                 )
+                _, expert_results = self.expert_model.predict_action_batch(
+                    env_obs=env_obs,
+                    **kwargs,
+                )
+                expert_actions = expert_results["forward_inputs"]["model_action"].clone()
+
 
         # Store whether expert was used in result for filtering (only relevant for simulation)
         # Convert to Python bool to ensure proper comparison
         result["use_expert"] = bool(use_expert)
+
+        # raise ValueError("expert action: ", expert_actions.shape, " result.forward_inputs.model_action: ", result["forward_inputs"]["model_action"].shape)
+        result["forward_inputs"]["model_action"] = expert_actions
+        # shape = result["forward_inputs"]["model_action"].shape
+        # dtype = result["forward_inputs"]["model_action"].dtype
+        # device = result["forward_inputs"]["model_action"].device
+        # result["forward_inputs"]["model_action"] = torch.ones(shape, dtype=dtype, device = device) * -1.0
+
 
         return actions, result
 
@@ -313,21 +303,7 @@ class DaggerRolloutWorker(Worker):
         intervene_actions = env_output["intervene_actions"]
         intervene_flags = env_output["intervene_flags"]
         if intervene_actions is not None: 
-            """           
-            if "action" in forward_inputs:
-                policy_action = forward_inputs["action"].to(intervene_actions.device)
-                policy_action = policy_action.reshape(
-                    policy_action.shape[0], self.hf_model.num_action_chunks, -1
-                )
-                intervene_actions = intervene_actions.reshape(
-                    intervene_actions.shape[0], self.hf_model.num_action_chunks, -1
-                )
-                action = intervene_actions * intervene_flags[
-                    ..., None
-                ] + policy_action * (~intervene_flags[..., None])
-                action = action.reshape(action.shape[0], -1)
-                forward_inputs["action"] = action
-            """
+            raise ValueError("unsupported intervene_actions: ", intervene_actions)
             if "model_action" in forward_inputs:
                 model_action = forward_inputs["model_action"].to(intervene_actions.device)
                 """
@@ -397,39 +373,6 @@ class DaggerRolloutWorker(Worker):
                     )
                     actions, result = self.predict(extracted_obs)
                     
-                    # For OpenPI, forward_inputs contains model_action but not action (environment-space)
-                    # We need to add action to forward_inputs so that update_intervene_actions can work
-                    # Store the current step's forward_inputs with action added for next step's intervene handling
-                    """hzf
-                    current_forward_inputs = result["forward_inputs"].copy()
-                    if "action" not in current_forward_inputs:
-                        # Add environment-space action to forward_inputs for intervene_actions handling
-                        # Convert actions from numpy to tensor if needed
-                        if isinstance(actions, np.ndarray):
-                            # Get device from extracted_obs
-                            if isinstance(extracted_obs, dict):
-                                sample_tensor = None
-                                if "main_images" in extracted_obs:
-                                    sample_tensor = extracted_obs["main_images"]
-                                elif "states" in extracted_obs:
-                                    sample_tensor = extracted_obs["states"]
-                                elif len(extracted_obs) > 0:
-                                    sample_tensor = list(extracted_obs.values())[0]
-                                
-                                if sample_tensor is not None and torch.is_tensor(sample_tensor):
-                                    device = sample_tensor.device
-                                else:
-                                    device = "cpu"
-                            else:
-                                device = "cpu"
-                            actions_tensor = torch.from_numpy(actions).to(device=device)
-                        else:
-                            actions_tensor = actions
-                        current_forward_inputs["action"] = actions_tensor
-                    """
-                    # Check if the step we're saving (t-1) had intervention (like hil-serl: only save intervened steps)
-                    # Note: We save last_forward_inputs[stage_id], which is the forward_inputs from step t-1
-                    # So we need to check if step t-1 had intervention, not step t
                     should_save = True
                     if self.only_save_intervened:
                         # Check for intervention in step t-1 (the step we're saving):
@@ -453,9 +396,7 @@ class DaggerRolloutWorker(Worker):
                         should_save = step_t_minus_1_intervened
                     
                     # Store last step's forward_inputs (which contains obs_{t-1} and action_{t-1})
-                    # This is consistent with SAC version and allows proper handling of intervene_actions
-                    # For SFT training, storing (obs_{t-1}, action_{t-1}) is mathematically equivalent to (obs_t, action_t)
-                    # since we're learning the same mapping function f: obs -> action
+
                     if should_save:
                         chunk_step_result = ChunkStepResult(
                             prev_logprobs=result["prev_logprobs"],
@@ -509,6 +450,7 @@ class DaggerRolloutWorker(Worker):
                             step_t_minus_1_intervened = bool(last_results[stage_id]["use_expert"])
                     
                     should_save = step_t_minus_1_intervened
+                    raise ValueError("not support hg-dagger's only_save_intervened now")
                 
                 if should_save:
                     self.buffer_list[stage_id].dones.append(dones)

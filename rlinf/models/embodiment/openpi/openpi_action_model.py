@@ -197,6 +197,7 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
         self._output_transform = _transforms.compose(output_transforms)
 
     def input_transform(self, obs: dict, transpose=True):
+        # raise ValueError("obs keys:", obs.keys())
         inputs = jax.tree.map(lambda x: x, obs)
         # process input
         first_process = "prompt" in inputs.keys()
@@ -323,6 +324,8 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
             "observation/image": env_obs["main_images"],
             "prompt": env_obs["task_descriptions"],
         }
+        if 'extra_view_images' in env_obs:
+            processed_obs["observation/wrist_image"] = env_obs["extra_view_images"]
         # state observation - ensure float32 to prevent BFloat16 conversion issues
         if "calvin" in self.config.config_name:
             state = env_obs["states"]
@@ -816,3 +819,7 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
             self.paligemma_with_expert.paligemma.eval()
             for params in self.paligemma_with_expert.paligemma.parameters():
                 params.requires_grad = False
+    
+    @property
+    def num_action_chunks(self):
+        return self.config.action_chunk

@@ -351,6 +351,7 @@ class FrankaEnv(gym.Env):
                         "tcp_pose": gym.spaces.Box(
                             -np.inf, np.inf, shape=(obs_tcp_pose_dim,)
                         ),
+                        "gripper_position": gym.spaces.Box(-1, 1, shape=(1,)),
                     }
                 ),
                 "frames": gym.spaces.Dict(
@@ -521,6 +522,11 @@ class FrankaEnv(gym.Env):
                 "tcp_torque": self._franka_state.tcp_torque,
             } if not self.config.only_pos else {
                 "tcp_pose": self._franka_state.tcp_pose,
+                "gripper_position": np.array(
+                    [
+                        self._franka_state.gripper_position,
+                    ]
+                ),
             }
             observation = {
                 "state": state,
@@ -529,6 +535,8 @@ class FrankaEnv(gym.Env):
             return copy.deepcopy(observation)
         else:
             obs = self._base_observation_space.sample()
+            obs["state"]["tcp_pose"] = np.array([0, 1, 2, 0, 0, 0, 1], dtype=np.float32)
+            obs["state"]["gripper_position"] = np.array([0.5], dtype=np.float32)
             return obs
 
     def transform_obs_base_to_ee(self, state):

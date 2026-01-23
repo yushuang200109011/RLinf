@@ -88,7 +88,7 @@ class RealWorldEnv(gym.Env):
             hardware_info=hardware_info,
             env_idx=env_idx,
         )
-        env = GripperCloseEnv(env)
+        # env = GripperCloseEnv(env)
         if not env.config.is_dummy and self.cfg.get("use_spacemouse", True):
             env = SpacemouseIntervention(env)
         env = RelativeFrame(env)
@@ -289,12 +289,21 @@ class RealWorldEnv(gym.Env):
         raw_chunk_intervene_flag = []
         for i in range(chunk_size):
             actions = chunk_actions[:, i]
+            # raise ValueError("actions:", actions.shape, "chunk_actions:", chunk_actions.shape)  (1, 7), (1, 10, 7)
             extracted_obs, step_reward, terminations, truncations, infos = self.step(
                 actions, auto_reset=False
             )
             if "intervene_action" in infos:
                 raw_chunk_intervene_actions.append(infos["intervene_action"])
                 raw_chunk_intervene_flag.append(infos["intervene_flag"])
+                # if infos["intervene_flag"]:
+                #     raw_chunk_intervene_actions.append(infos["intervene_action"])
+                # else: 
+                #     dtype = infos["intervene_action"].dtype
+                #     device = infos["intervene_action"].device
+                #     raw_chunk_intervene_actions.append(
+                #         torch.from_numpy(actions).to(dtype=dtype, device=device)
+                #     )
 
             chunk_rewards.append(step_reward)
             raw_chunk_terminations.append(terminations)

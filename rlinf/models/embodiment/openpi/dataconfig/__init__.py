@@ -30,7 +30,7 @@ from rlinf.models.embodiment.openpi.dataconfig.calvin_dataconfig import (
     LeRobotCalvinDataConfig,
 )
 from rlinf.models.embodiment.openpi.dataconfig.franka_dataconfig import (
-    CustomDataConfig,
+    CustomDataConfig, LeRobotFrankaEEDataConfig
 )
 from rlinf.models.embodiment.openpi.dataconfig.libero_dataconfig import (
     LeRobotLiberoDataConfig,
@@ -49,6 +49,19 @@ from rlinf.models.embodiment.openpi.dataconfig.robotwin_aloha_dataconfig import 
 )
 
 _CONFIGS = [
+    TrainConfig(
+        name="pi0_franka",
+        model=pi0_config.Pi0Config(pi05=False, action_dim=32, action_horizon=10),
+        data=LeRobotFrankaEEDataConfig(
+            repo_id="redduck",
+            base_config=DataConfig(prompt_from_task=True),
+            norm_mode="auto",
+        ),
+        # weight_loader=weight_loaders.CheckpointWeightLoader(
+        #     "checkpoints/jax/pi0_base/params"
+        # ),
+        pytorch_weight_path="checkpoints/torch/pi0_base",
+    ),
     TrainConfig(
         name="pi0_libero",
         model=pi0_config.Pi0Config(),

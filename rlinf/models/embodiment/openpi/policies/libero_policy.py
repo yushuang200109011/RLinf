@@ -65,6 +65,7 @@ class LiberoInputs(transforms.DataTransformFn):
         # of image, e.g. wrist images, you can comment it out here and
         # replace it with zeros like we do for the
         # right wrist image below.
+        print("!!!!!!!!shapes:", data["observation/image"].shape, data["observation/wrist_image"].shape)
         base_image = _parse_image(data["observation/image"])
         wrist_image = _parse_image(data["observation/wrist_image"])
 

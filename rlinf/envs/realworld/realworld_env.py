@@ -31,6 +31,7 @@ from rlinf.envs.realworld.common.wrappers import (
     Quat2EulerWrapper,
     RelativeFrame,
     SpacemouseIntervention,
+    KeyboardBinaryRewardDoneWrapper,
 )
 from rlinf.envs.realworld.venv import NoAutoResetSyncVectorEnv
 from rlinf.envs.utils import (
@@ -92,6 +93,7 @@ class RealWorldEnv(gym.Env):
         # env = GripperCloseEnv(env)
         if not env.config.is_dummy and self.cfg.get("use_spacemouse", True):
             env = SpacemouseIntervention(env)
+        env = KeyboardBinaryRewardDoneWrapper(env)
         env = RelativeFrame(env)
         env = Quat2EulerWrapper(env)
         return env

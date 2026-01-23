@@ -18,6 +18,7 @@ import jax
 import numpy as np
 import torch
 import openpi.models.model as _model
+from rlinf.models.embodiment.base_policy import ForwardType
 from rlinf.scheduler import Channel
 from rlinf.utils.distributed import all_reduce_dict
 from rlinf.utils.metric_utils import (
@@ -137,7 +138,7 @@ class AsyncEmbodiedDAGGERFSDPPolicy(EmbodiedDAGGERFSDPPolicy):
 
                     with self.amp_context:
                         losses = self.model(
-                            forward_type="sft_forward",
+                            forward_type=ForwardType.SFT,
                             data={"observation": observation, "actions": actions},
                         )
                         if isinstance(losses, (list, tuple)):
@@ -208,7 +209,7 @@ class AsyncEmbodiedDAGGERFSDPPolicy(EmbodiedDAGGERFSDPPolicy):
 
                     with self.amp_context:
                         losses = self.model(
-                            forward_type="sft_forward",
+                            forward_type=ForwardType.SFT,
                             data={"observation": observation, "actions": actions},
                         )
                         if isinstance(losses, (list, tuple)):

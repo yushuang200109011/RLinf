@@ -144,7 +144,9 @@ class AsyncDaggerRolloutWorker(DaggerRolloutWorker):
                         # In real-world setup, expert_model is removed, human intervention is handled by update_intervene_actions
                         if "intervene_flags" in env_output and env_output["intervene_flags"] is not None:
                             intervene_flags = env_output["intervene_flags"].bool()
-                            step_t_minus_1_intervened = intervene_flags.any().item()
+                            # step_t_minus_1_intervened = intervene_flags.any().item()
+                            # raise ValueError("intervene_flags:", intervene_flags, intervene_flags.shape)
+                            step_t_minus_1_intervened = torch.sum(intervene_flags).item() > (intervene_flags.numel() * 0.6)  # at least 60% of batch has intervention
                         
                         # Priority 2: Check simulation: if expert policy was used in step t-1
                         # Only check this if no real-world intervention was detected

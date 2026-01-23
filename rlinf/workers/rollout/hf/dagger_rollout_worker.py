@@ -61,18 +61,15 @@ class DaggerRolloutWorker(Worker):
 
         # Start with actor.model as base to ensure all required fields are present
         # Then override with expert_model specific values
-        expert_model_config = copy.deepcopy(self.cfg.actor.model)
-        with open_dict(expert_model_config):
-            # Override with expert_model specific values from actor.expert_model
-            # hzf
-            # expert_model_config.path = self.cfg.rollout.expert_model.model_path
-            # Also set model_path for compatibility (get_model uses cfg.model_path)
-            expert_model_config.model_path = self.cfg.rollout.expert_model.model_path
+        if self.cfg.actor.get("expert_model", None) is not None:
+            expert_model_config = copy.deepcopy(self.cfg.actor.model)
+            with open_dict(expert_model_config):
+                expert_model_config.model_path = self.cfg.rollout.expert_model.model_path
 
-        self.expert_model = get_model(expert_model_config)
+            self.expert_model = get_model(expert_model_config)
+            self.expert_model.eval()
 
         self.hf_model.eval()
-        self.expert_model.eval()
 
         self.setup_sample_params()
         if self.enable_offload:
@@ -201,11 +198,14 @@ class DaggerRolloutWorker(Worker):
                     env_obs=env_obs,
                     **kwargs,
                 )
-                _, expert_results = self.expert_model.predict_action_batch(
-                    env_obs=env_obs,
-                    **kwargs,
-                )
-                expert_actions = expert_results["forward_inputs"]["model_action"].clone()
+                if has_expert_model:
+                    _, expert_results = self.expert_model.predict_action_batch(
+                        env_obs=env_obs,
+                        **kwargs,
+                    )
+                    expert_actions = expert_results["forward_inputs"]["model_action"].clone()
+                else:
+                    expert_actions = result["forward_inputs"]["model_action"].clone()
 
 
         # Store whether expert was used in result for filtering (only relevant for simulation)
@@ -303,17 +303,22 @@ class DaggerRolloutWorker(Worker):
         intervene_actions = env_output["intervene_actions"]
         intervene_flags = env_output["intervene_flags"]
         if intervene_actions is not None: 
-            raise ValueError("unsupported intervene_actions: ", intervene_actions)
+            # raise ValueError("unsupported intervene_actions: ", intervene_actions)
             if "model_action" in forward_inputs:
                 model_action = forward_inputs["model_action"].to(intervene_actions.device)
-                """
-                model_action = model_action.reshape(
-                    model_action.shape[0], self.hf_model.num_action_chunks, -1
-                )
-                """
                 intervene_actions = intervene_actions.reshape(
                     intervene_actions.shape[0], self.hf_model.num_action_chunks, -1
                 )
+                # pad intervene_actions to match model_action shape if needed
+                if intervene_actions.shape != model_action.shape:
+                    assert intervene_actions.shape[0] == model_action.shape[0]
+                    assert intervene_actions.shape[1] == model_action.shape[1]
+                    assert intervene_actions.shape[2] <= model_action.shape[2]
+                    pad_size = model_action.shape[2] - intervene_actions.shape[2]
+                    intervene_actions = torch.nn.functional.pad(
+                        intervene_actions, (0, pad_size), mode="constant", value=0.0
+                    )
+                # raise ValueError("intervene_actions shape:", intervene_actions.shape, " model_action shape:", model_action.shape, "; inter flags:", intervene_flags, "trans inter flags:", intervene_flags[..., None].shape)
                 model_action = intervene_actions * intervene_flags[
                     ..., None
                 ] + model_action * (~intervene_flags[..., None])
@@ -384,7 +389,10 @@ class DaggerRolloutWorker(Worker):
                         # In real-world setup, expert_model is removed, human intervention is handled by update_intervene_actions
                         if "intervene_flags" in env_output and env_output["intervene_flags"] is not None:
                             intervene_flags = env_output["intervene_flags"].bool()
-                            step_t_minus_1_intervened = intervene_flags.any().item()
+
+                            # step_t_minus_1_intervened = intervene_flags.any().item()
+                            raise ValueError("intervene_flags:", intervene_flags, intervene_flags.shape)
+                            step_t_minus_1_intervened = torch.sum(intervene_flags) > (len(intervene_flags) * 0.6)  # at least 1% of batch has intervention
                         
                         # Priority 2: Check simulation: if expert policy was used in step t-1
                         # Only check this if no real-world intervention was detected
@@ -536,13 +544,15 @@ class DaggerRolloutWorker(Worker):
 
     def offload_model(self):
         self.hf_model = self.hf_model.to("cpu")
-        self.expert_model = self.expert_model.to("cpu")
+        if hasattr(self, "expert_model"):
+            self.expert_model = self.expert_model.to("cpu")
         gc.collect()
         torch.cuda.empty_cache()
 
     def reload_model(self):
         self.hf_model = self.hf_model.to(self.device)
-        self.expert_model = self.expert_model.to(self.device)
+        if hasattr(self, "expert_model"):
+            self.expert_model = self.expert_model.to(self.device)
 
     async def recv_env_output(
         self, input_channel: Channel, mode="train"

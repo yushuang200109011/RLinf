@@ -48,10 +48,11 @@ class DataCollector(Worker):
             obs.pop("task_descriptions", None)
         ret_obs = {}
         for key in obs:
-            if "images" in key:
-                ret_obs[key] = obs[key].clone()[0].float() / 255.0
-            else:
-                ret_obs[key] = obs[key][0]
+            # if "images" in key:
+            #     ret_obs[key] = obs[key].clone()[0].float() / 255.0
+            # else:
+            #     ret_obs[key] = obs[key][0]
+            ret_obs[key] = obs[key][0]
         return ret_obs
 
     def run(self):
@@ -61,7 +62,7 @@ class DataCollector(Worker):
             range(self.num_data_episodes), desc="Collecting Data Episodes:"
         )
         while success_cnt < self.num_data_episodes:
-            action = np.zeros((1, 6))
+            action = np.zeros((1, 7))
             next_obs, reward, done, _, info = self.env.step(action)
             if "intervene_action" in info:
                 action = info["intervene_action"]

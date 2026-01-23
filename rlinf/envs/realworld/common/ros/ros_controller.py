@@ -55,7 +55,7 @@ class ROSController:
                     self._ros_core = psutil.Popen(
                         ["roscore"], stdout=sys.stdout, stderr=sys.stdout
                     )
-                    time.sleep(1)  # Wait for roscore to start
+                    time.sleep(10)  # Wait for roscore to start
 
         # Initialize ros node
         rospy.init_node("franka_controller", anonymous=True)

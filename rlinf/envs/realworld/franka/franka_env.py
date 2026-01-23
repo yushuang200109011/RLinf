@@ -292,6 +292,7 @@ class FrankaEnv(gym.Env):
             self._controller.reset_joint(self.config.joint_reset_qpos).wait()
             time.sleep(0.5)
 
+        self._gripper_action(1)
         # Reset arm
         if self.config.enable_random_reset:
             reset_pose = self._reset_pose.copy()

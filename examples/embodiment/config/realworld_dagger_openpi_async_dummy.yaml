@@ -13,28 +13,10 @@ hydra:
     - file://${oc.env:EMBODIED_PATH}/config/
 
 cluster:
-  num_nodes: 2
+  num_nodes: 1
   component_placement:
-    actor:
-      node_group: "train"
-      placement: 0
-    rollout:
-      node_group: "train"
-      placement: 1
-    env:
-      node_group: franka
-      placement: 0
-  node_groups:
-    - label: "train" # GPU node group
-      node_ranks: 0 # The ranks of the nodes to be included in this group， change this if your training node is not rank 0
-    - label: franka
-      node_ranks: 1 # Change this if your robot node is not rank 1
-      hardware:
-        type: Franka
-        configs:
-          - robot_ip: 10.100.25.107
-            node_rank: 1
-            camera_serials: ["233522071854", "233622071355"]
+    actor: 0
+    rollout, env: 1
 
 runner:
   task_type: embodied
@@ -58,7 +40,7 @@ algorithm:
   # expert_intervention_rate_decay_steps: 100
   # expert_intervention_rate_decay_factor: 0.99  # Decay factor for exponential schedule (only used if schedule="exponential")
   only_save_intervened: True
-  sampling_ratio: 0.5
+  sampling_ratio: 0.0
 
   rollout_epoch: 1
   eval_rollout_epoch: 1
@@ -67,7 +49,7 @@ algorithm:
   group_size: 1
   
   replay_buffer_capacity: 30000
-  min_buffer_size: 128
+  min_buffer_size: 64
   
   adv_type: gae
   loss_type: embodied_sac
@@ -106,34 +88,34 @@ env:
     ignore_terminations: False
     auto_reset: True
     use_spacemouse: True
-    max_steps_per_rollout_epoch: 240
-    max_episode_steps: 240
     override_cfg:
+      is_dummy: True
       max_num_steps: 240
-      enable_random_reset: False
       target_ee_pose: [4.88791729e-01, -2.57317177e-03, 0, -3.13894874e+00, 1.49390026e-02, 4.68428620e-03]
       # Dummy placeholders for robot and camera
       random_xy_range: 0.15
       random_z_range_low: 0.01
       random_z_range_high: 0.15
       random_rz_range: 0.5
+      robot_ip: 0.0.0.0
+      camera_serials: ["0123456789", "9876543210"]
   
   eval:
     total_num_envs: 1
     ignore_terminations: False
     auto_reset: True
     use_spacemouse: True
-    max_steps_per_rollout_epoch: 240
-    max_episode_steps: 240
     override_cfg:
+      is_dummy: True
       max_num_steps: 240
-      enable_random_reset: False
       target_ee_pose: [4.88791729e-01, -2.57317177e-03, 0, -3.13894874e+00, 1.49390026e-02, 4.68428620e-03]
       # Dummy placeholders for robot and camera
       random_xy_range: 0.15
       random_z_range_low: 0.01
       random_z_range_high: 0.15
       random_rz_range: 0.5
+      robot_ip: 0.0.0.0
+      camera_serials: ["0123456789", "9876543210"]
 
 rollout:
   group_name: "RolloutGroup"
@@ -155,7 +137,7 @@ actor:
   training_backend: "fsdp"
 
   micro_batch_size: 32
-  global_batch_size: 64
+  global_batch_size: 128
   seed: 1234
   enable_offload: False
 
@@ -192,11 +174,11 @@ actor:
     adam_beta1: 0.9
     adam_beta2: 0.95
     adam_eps: 1.0e-08
-    weight_decay: 1.0e-8
-    clip_grad: 2.0
-    warmup_style: "cosine"  
+    weight_decay: 1.0e-10
+    clip_grad: 1.0
+    warmup_style: "cosine"
     lr_warmup_steps: 15
-    total_training_steps: 5000  # for lr scheduler cosine decay
+    total_training_steps: 4000  # for lr scheduler cosine decay
 
   fsdp_config:
     strategy: "fsdp"
@@ -213,4 +195,4 @@ reward:
 critic:
   use_critic_model: False
 
-initial_sft_data_path: "/home/ysa/.cache/huggingface/lerobot"
+initial_sft_data_path: ""

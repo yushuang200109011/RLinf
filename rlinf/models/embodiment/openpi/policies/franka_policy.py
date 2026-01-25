@@ -61,6 +61,7 @@ class FrankaEEOutputs(transforms.DataTransformFn):
         # For Libero, we only return the first 7 actions (since the rest is padding).
         # For your own dataset, replace `7` with the action dimension of your dataset.
         if self.action_train_with_rotation_6d:
+            raise NotImplementedError("FrankaEEOutputs with rotation_6d not implemented yet.")
             if isinstance(data["actions"], np.ndarray):
                 data["actions"] = torch.from_numpy(data["actions"]).float()
             act_xyz = data["actions"][:, :3]
@@ -153,6 +154,7 @@ class FrankaEEInputs(transforms.DataTransformFn):
             assert len(data["actions"].shape)==2 and data["actions"].shape[-1] == 7, \
                 f"Expected actions shape (N, 7), got {data['actions'].shape}"
             if self.action_train_with_rotation_6d:
+                raise NotImplementedError("FrankaEEInputs with rotation_6d not implemented yet.")
                 if isinstance(data["actions"], np.ndarray):
                     data["actions"] = torch.from_numpy(data["actions"]).float()
                 act_xyz = data["actions"][:,:3] # [x, y, z]

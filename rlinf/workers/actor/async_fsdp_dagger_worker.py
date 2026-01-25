@@ -135,7 +135,12 @@ class AsyncEmbodiedDAGGERFSDPPolicy(EmbodiedDAGGERFSDPPolicy):
                     )
                     actions = actions.to(torch.float32)
                     actions = actions.to(self.device)
+                    # breakpoint()
 
+                    # save_image(observation.images['base_0_rgb'][0], 'sft_base_0_rgb.png', normalize=True, value_range=(-1, 1))
+                    # save_image(observation.images['left_wrist_0_rgb'][0], 'sft_left_wrist_0_rgb.png', normalize=True, value_range=(-1, 1))
+                    # raise ValueError("actions:", actions[0, 0, :], "state:", observation.state[0], "img_shape:", observation.images['base_0_rgb'].shape)
+                    # raise ValueError("actions std:", torch.std(actions[:, :, :7], dim=(0, 1)), "actions mean", torch.mean(actions[:, :, :7], dim=(0, 1)), "state std:", torch.std(observation.state[:20], dim = 0), "state mean:", torch.mean(observation.state[:20], dim = 0), "img_shape:", observation.images['base_0_rgb'].shape)
                     with self.amp_context:
                         losses = self.model(
                             forward_type=ForwardType.SFT,
@@ -147,12 +152,14 @@ class AsyncEmbodiedDAGGERFSDPPolicy(EmbodiedDAGGERFSDPPolicy):
                             losses = torch.tensor(
                                 losses, device=self.device, dtype=torch.float32
                             )
+                        # losses = losses[:, : self.model.config.action_chunk, : self.model.config.action_env_dim]
                         loss = losses.mean()
 
                     total_loss += loss.item()
                     loss = loss / self.gradient_accumulation
-                    with backward_ctx:
-                        self.grad_scaler.scale(loss).backward()
+                    # with backward_ctx:
+                    #     self.grad_scaler.scale(loss).backward()
+                    loss.backward()
             else:
                 # Path 2: Sample from replay buffer (existing logic)
                 print("Sampling from replay buffer")
@@ -160,15 +167,14 @@ class AsyncEmbodiedDAGGERFSDPPolicy(EmbodiedDAGGERFSDPPolicy):
                     self.cfg.actor.global_batch_size // self._world_size
                 )
                 if self.demo_buffer is not None:
+                    raise NotImplementedError("Demo buffer not supported in async DAgger worker yet.")
                     print(f"Sampling from replay buffer and demo buffer")
                     replay_batch = self.replay_buffer.sample(global_batch_size_per_rank // 2)
                     demo_batch = self.demo_buffer.sample(global_batch_size_per_rank // 2)
                     global_batch = concat_batch(replay_batch, demo_batch)
-                    print(f"Global batch size: {len(global_batch)}")
                 else:
                     print(f"Sampling from replay buffer")
                     global_batch = self.replay_buffer.sample(global_batch_size_per_rank)
-                    print(f"Global batch size: {len(global_batch)}")
                 # Split into micro batches
                 train_micro_batch_list = split_dict_to_chunk(
                     global_batch,
@@ -192,7 +198,16 @@ class AsyncEmbodiedDAGGERFSDPPolicy(EmbodiedDAGGERFSDPPolicy):
                             f"Could not find 'model_observation' or 'observation' in batch. Available keys: {list(batch.keys())}"
                         )
                     if "model_action" in batch:
-                        actions = batch["model_action"]
+                        # norm actions
+                        tmp_obs_dict = {
+                            "observation/state": batch["observation/state"],
+                            "observation/image": batch["observation/image"],
+                            "observation/wrist_image": batch["observation/wrist_image"],
+                            "actions": batch["model_action"][:, :, :self.model.config.action_env_dim],
+                            "prompt": ["empty" for i in range(batch["model_action"].shape[0])],
+                        }
+                        normed = self.model.input_transform(tmp_obs_dict, transpose=False)
+                        actions = normed["actions"]
                     else:
                         raise KeyError(
                             f"Could not find 'model_action' or 'action' in batch. Available keys: {list(batch.keys())}"
@@ -207,6 +222,9 @@ class AsyncEmbodiedDAGGERFSDPPolicy(EmbodiedDAGGERFSDPPolicy):
                     actions = actions.to(torch.float32)
                     actions = actions.to(self.device)
 
+                    # save_image(observation.images['base_0_rgb'][0], 'dagger_base_0_rgb.png', normalize=True, value_range=(-1, 1))
+                    # save_image(observation.images['left_wrist_0_rgb'][0], 'dagger_left_wrist_0_rgb.png', normalize=True, value_range=(-1, 1))
+                    # raise ValueError("actions std:", torch.std(actions[:, :, :7], dim=(0, 1)), "actions mean", torch.mean(actions[:, :, :7], dim=(0, 1)), "state std:", torch.std(observation.state[:20], dim = 0), "state mean:", torch.mean(observation.state[:20], dim = 0), "img_shape:", observation.images['base_0_rgb'].shape)
                     with self.amp_context:
                         losses = self.model(
                             forward_type=ForwardType.SFT,
@@ -218,7 +236,7 @@ class AsyncEmbodiedDAGGERFSDPPolicy(EmbodiedDAGGERFSDPPolicy):
                             losses = torch.tensor(
                                 losses, device=self.device, dtype=torch.float32
                             )
-                        losses = losses[:, : self.model.config.action_chunk, : self.model.config.action_env_dim]
+                        # losses = losses[:, : self.model.config.action_chunk, : self.model.config.action_env_dim]
                         loss = losses.mean()
 
                     total_loss += loss.item()
@@ -226,25 +244,6 @@ class AsyncEmbodiedDAGGERFSDPPolicy(EmbodiedDAGGERFSDPPolicy):
                     # with backward_ctx:
                     #     self.grad_scaler.scale(loss).backward()
                     loss.backward()
-            # ========== END: Choose different loop based on data source ==========
-
-            # Manual gradient sync (temporary fix)
-            # breakpoint()
-            # torch.cuda.synchronize()
-            # if torch.distributed.is_initialized():
-            #     all_grads = []
-            #     for name, param in self.model.named_parameters():
-            #         if param.grad is not None:
-            #             all_grads.append((name, param.grad))
-            #     process_group = getattr(self.model, "process_group", None)
-            #     for name, grad in all_grads:
-            #         torch.distributed.all_reduce(
-            #             grad, op=torch.distributed.ReduceOp.AVG, group=process_group
-            #         )
-            #     process_group = getattr(self.model, "process_group", None)
-            #     torch.distributed.barrier(
-            #         group=process_group, device_ids=[torch.cuda.current_device()]
-            #     )
 
             avg_loss = total_loss / self.gradient_accumulation
             grad_norm, lr_list = self.optimizer_step()

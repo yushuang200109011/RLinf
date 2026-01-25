@@ -378,6 +378,8 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
             processed_obs
         )  # obs precision processor
         observation = _model.Observation.from_dict(processed_obs)
+        # raise ValueError("obs.state", observation.state[0], "obs.images", observation.images["base_0_rgb"][0, 0, 122, :])
+        # ValueError: ('obs.state', torch.Size([1, 32]), 'obs.images', torch.Size([1, 3, 224, 224]))
         outputs = self.sample_actions(
             observation, mode=mode, compute_values=compute_values
         )

@@ -147,6 +147,7 @@ class AsyncDaggerRolloutWorker(DaggerRolloutWorker):
                             # step_t_minus_1_intervened = intervene_flags.any().item()
                             # raise ValueError("intervene_flags:", intervene_flags, intervene_flags.shape)
                             step_t_minus_1_intervened = torch.sum(intervene_flags).item() > (intervene_flags.numel() * 0.6)  # at least 60% of batch has intervention
+                            print(f"[DEBUG] {torch.sum(intervene_flags).item()}/{intervene_flags.numel()}, should_save={step_t_minus_1_intervened}")
                         
                         # Priority 2: Check simulation: if expert policy was used in step t-1
                         # Only check this if no real-world intervention was detected
@@ -164,17 +165,9 @@ class AsyncDaggerRolloutWorker(DaggerRolloutWorker):
                         # Log every 100 steps or first 50 saved steps for debugging
                         if (self._saved_steps <= 50 or self._saved_steps % 100 == 0) and self._rank == 0:
                             print(f"[DEBUG] Saved {self._saved_steps} steps out of {self._total_steps} total steps "
-                                  f"({self._intervened_steps} intervened steps, "
+                                  f"({self._intervened_steps} expert steps, "
                                   f"save_rate: {self._saved_steps/self._total_steps*100:.1f}%)")
                     
-                    # Log first 100 steps or when should_save changes to debug
-                    if (self._total_steps <= 100 or (self._total_steps % 1000 == 0)) and self._rank == 0:
-                        use_expert_current = bool(result.get("use_expert", False)) if result else False
-                        use_expert_last = bool(last_results[stage_id].get("use_expert", False)) if last_results[stage_id] else False
-                        print(f"[DEBUG Step {self._total_steps}] should_save={should_save}, "
-                              f"use_expert_current={use_expert_current}, use_expert_last={use_expert_last}, "
-                              f"last_results_is_none={last_results[stage_id] is None}, "
-                              f"saved_steps={self._saved_steps}, intervened_steps={self._intervened_steps}")
 
                     if should_save:
                         await self.buffer_list[stage_id].add(

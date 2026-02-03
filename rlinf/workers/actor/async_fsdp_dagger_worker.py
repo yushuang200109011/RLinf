@@ -75,7 +75,15 @@ class AsyncEmbodiedDAGGERFSDPPolicy(EmbodiedDAGGERFSDPPolicy):
                     f"Replay buffer size {current_buffer_size} < {min_buffer_size}, skipping training. "
                     f"Buffer capacity: {self.replay_buffer.capacity if hasattr(self.replay_buffer, 'capacity') else 'N/A'}"
                 )
-                return False
+                # log replay buffer anyway
+                # Add buffer stats
+                replay_buffer_stats = self.replay_buffer.get_stats()
+                replay_buffer_stats = {
+                    f"replay_buffer/{key}": value
+                    for key, value in replay_buffer_stats.items()
+                }
+                return replay_buffer_stats
+            # print("!!!!!!!!! train time:", time.time())
             self.log_on_first_rank(f"Training with {current_buffer_size} samples")
             self.model.train()
             if hasattr(self.model, "gradient_checkpointing_disable"):

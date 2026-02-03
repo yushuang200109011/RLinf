@@ -146,7 +146,8 @@ class AsyncDaggerRolloutWorker(DaggerRolloutWorker):
                             intervene_flags = env_output["intervene_flags"].bool()
                             # step_t_minus_1_intervened = intervene_flags.any().item()
                             # raise ValueError("intervene_flags:", intervene_flags, intervene_flags.shape)
-                            step_t_minus_1_intervened = torch.sum(intervene_flags).item() > (intervene_flags.numel() * 0.6)  # at least 60% of batch has intervention
+                            # step_t_minus_1_intervened = torch.sum(intervene_flags).item() > (intervene_flags.numel() * 0.6)  # at least 60% of batch has intervention
+                            step_t_minus_1_intervened = intervene_flags.all()
                             print(f"[DEBUG] {torch.sum(intervene_flags).item()}/{intervene_flags.numel()}, should_save={step_t_minus_1_intervened}")
                         
                         # Priority 2: Check simulation: if expert policy was used in step t-1
@@ -253,9 +254,9 @@ class AsyncDaggerRolloutWorker(DaggerRolloutWorker):
 
                     with self.worker_timer():
                         actions, result = self.predict(extracted_obs)
-
-                    # hzf
-                    # self._add_action_to_forward_inputs(actions, extracted_obs, result)                    
+                    end = time.time()
+                    print(f"rollout worker predict time: {end - start:.4f}")
+                  
                     
                     if "prev_values" in result:
                         await self.buffer_list[i].add(

@@ -93,6 +93,7 @@ class AsyncDaggerRunner(DaggerRunner):
 
         train_step = start_step
         while train_step < self.max_steps:
+            _ = self.timer.consume_durations()
             if (
                 train_step > 0
                 and self.cfg.runner.val_check_interval > 0
@@ -103,21 +104,26 @@ class AsyncDaggerRunner(DaggerRunner):
                 eval_metrics = {f"eval/{k}": v for k, v in eval_metrics.items()}
                 self.metric_logger.log(data=eval_metrics, step=train_step)
 
-            actor_result = self.actor.run_training().wait()
-            if not actor_result[0]:
+            with self.timer("train"):
+                actor_result = self.actor.run_training().wait()
+
+            log_time = int(time.time() * 10)
+            # update env metrics anyway
+            env_metrics = self.get_env_metrics()
+            if env_metrics is not None:
+                rollout_metrics = {f"env/{k}": v for k, v in env_metrics.items()}
+                self.metric_logger.log(rollout_metrics, log_time)
+            
+            training_metrics = {f"train/{k}": v for k, v in actor_result[0].items()}
+            self.metric_logger.log(training_metrics, log_time)
+
+            if "loss" not in actor_result[0].keys():
                 time.sleep(1.0)
                 continue
             train_step += 1
             self.global_step = train_step  # Update global_step to match train_step for checkpoint saving
-            self.update_rollout_weights()
-
-            training_metrics = {f"train/{k}": v for k, v in actor_result[0].items()}
-            self.metric_logger.log(training_metrics, train_step)
-
-            env_metrics = self.get_env_metrics()
-            if env_metrics is not None:
-                rollout_metrics = {f"env/{k}": v for k, v in env_metrics.items()}
-                self.metric_logger.log(rollout_metrics, train_step)
+            with self.timer("sync_weights"):
+                self.update_rollout_weights()
 
             _, save_model, _ = check_progress(
                 self.global_step,
@@ -129,6 +135,16 @@ class AsyncDaggerRunner(DaggerRunner):
             )
             if save_model:
                 self._save_checkpoint()
+
+            # env_handle.wait()
+            # rollout_handle.wait()
+            time_metrics = self.timer.consume_durations()
+            # time_metrics["env"] = env_handle.consume_duration()
+            # time_metrics["rollout"] = rollout_handle.consume_duration()
+            # breakpoint()
+            self.metric_logger.log(
+                {f"time/{k}": v for k, v in time_metrics.items()}, log_time
+            )
 
         self.env.stop().wait()
         self.rollout.stop().wait()

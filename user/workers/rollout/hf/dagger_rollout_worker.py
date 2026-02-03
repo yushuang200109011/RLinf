@@ -139,7 +139,7 @@ class DaggerRolloutWorker(Worker):
             progress = min(1.0, rollout_epoch / self.beta_decay_steps) if self.beta_decay_steps > 0 else 0.0
             self.beta = self.beta_min + (self.initial_beta - self.beta_min) * (1 - progress)
         elif self.beta_schedule == "exponential":
-            # 每次rollout epoch都乘以decay_factor，持续衰减
+            # rollout epochdecay_factor，
             self.beta = self.initial_beta * (self.beta_decay_factor ** rollout_epoch)
         elif self.beta_schedule == "cosine":
             import math

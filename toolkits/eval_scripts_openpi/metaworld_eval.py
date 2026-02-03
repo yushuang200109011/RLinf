@@ -57,7 +57,7 @@ def main(args):
 
     for env_name in env_list:
         logger.info(f"Start evaluating: {env_name}")
-        logger.info(f"任务描述 (Prompt): {task_description_dict[env_name]}")
+        logger.info(f" (Prompt): {task_description_dict[env_name]}")
         env = gym.make(
             "Meta-World/MT1",
             env_name=env_name,

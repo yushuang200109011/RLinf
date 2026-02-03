@@ -4,7 +4,7 @@ import os
 
 class kinematics:
     def __init__(self):
-        # 实例化七个变换矩阵
+        # 
         self.trasformation_matrix = [np.zeros((4,4)) for i in range(7)]
         pos_tf = [np.zeros(3) for i in range(7)]
         qua_tf = [np.zeros(4) for i in range(7)]
@@ -17,7 +17,7 @@ class kinematics:
         for i in range(7):
             self.trasformation_matrix = self.pose_to_transformation_matrix(position_l[i],quaternion_l[i])
 
-    '''四元数转旋转矩阵
+    '''
     '''
     def quaternion_to_rotation_matrix(self,quaternion):
         x, y, z, w = quaternion
@@ -29,7 +29,7 @@ class kinematics:
         ])
         return R
     
-    '''旋转，平移转变换矩阵Ｔ
+    '''，Ｔ
     '''
     def pose_to_transformation_matrix(self,position,quaternion):
         R = self.quaternion_to_rotation_matrix(quaternion)
@@ -46,10 +46,10 @@ class kinematics:
         quaternion = self.euler_angle_to_quaternion(euler)
         return self.pose_to_transformation_matrix(position,quaternion)
     
-    ''' 旋转矩阵转四元数
+    ''' 
     '''
     def rotation_matrix_to_quaternion(self, R):
-        # R 应该是一个 3x3 旋转矩阵
+        # R  3x3 
         R = R[0:3,0:3]
         q = np.zeros(4)
         K = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
@@ -81,7 +81,7 @@ class kinematics:
             z = 0.25 * S
         return [x,y,z,w]
 
-    ''' 变换矩阵转位置和四元数
+    ''' 
     '''
     def transformation_matrix_to_pos_qua(self,T):
         position = T[:3,3]
@@ -89,7 +89,7 @@ class kinematics:
         quaternion = self.rotation_matrix_to_quaternion(R)
         return position, quaternion
     
-    ''' 变换矩阵转位置和欧拉角
+    ''' 
     '''
     def transformation_matrix_to_pos_euler(self,T):
         position = T[:3,3]
@@ -104,7 +104,7 @@ class kinematics:
             t = np.dot(t,self.trasformation_matrix[i])
         return t
 
-    '''四元数转欧拉角
+    '''
     '''
     def quaternion_to_euler_angle(self,quaternion):
         x, y, z, w = quaternion
@@ -120,7 +120,7 @@ class kinematics:
         Z = math.atan2(t3, t4)
         return X, Y, Z
     
-    '''欧拉角转四元数
+    '''
     '''
     def euler_angle_to_quaternion(self, euler):
         roll, pitch, yaw = euler

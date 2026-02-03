@@ -9,7 +9,7 @@ from cv_bridge import CvBridge
 # msgs
 
 class SensorBase:
-    ''' 传感器抽象类，用于提供统一的接口和说明
+    ''' ，
     '''
     def __init__(self):
         pass
@@ -29,10 +29,10 @@ class Camera(SensorBase):
         self.cam3_time = rospy.Time.now()
 
     def compress_image(self,image_np):
-        """压缩图像为 JPEG 字节流（基类通用方法）"""
+        """ JPEG （）"""
         success, encoded = cv2.imencode(".jpg", image_np)
         if not success:
-            raise ValueError("图像压缩失败")
+            raise ValueError("")
         return encoded.tobytes()
 
     def camera1_callback(self, data):

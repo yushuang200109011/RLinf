@@ -116,33 +116,33 @@ def _build_prompt(
 
     # Do not use reference as scoring reference
     judge_prompt = """
-请你作为代码质量评估专家，对给定的代码补全结果进行质量评分。这份评分将用于强化学习训练中的奖励信号，因此请确保评分客观、一致且有区分度。
+，。，、。
 
-评估依据信息
+
 <prefix>{prefix}</prefix>
 <suffix>{suffix}</suffix>
 <completion>{response}</completion>
 
-信息项描述
-prefix: 代码的前半部分
-suffix: 代码的后半部分
-completion: LLM 提供的待评估补全内容（即 Prompt 和 Suffix 之间的部分）。
 
-评分标准如下，采用 0-10 分制，分为 5 个等级（0, 3, 6, 8, 10）：
-正确性和功能性（correctness_and_functionality）：
-0 分：代码完全不能实现预期功能，存在根本性逻辑错误
-3 分：代码能实现部分功能，但存在严重逻辑缺陷或无法处理常见情况
-6 分：代码能实现核心功能，但存在一些边缘情况处理不当或 minor 错误
-8 分：代码能正确实现所有功能，仅存在极少可忽略的问题
-10 分：代码完美实现所有功能，逻辑严谨，能妥善处理各种边缘情况
+prefix: 
+suffix: 
+completion: LLM （ Prompt  Suffix ）。
 
-请基于以上标准对提供的代码补全结果进行评分，并按照以下 XML 格式输出，确保分数为指定的五个等级之一，理由简短具体且有针对性：
+， 0-10 ， 5 （0, 3, 6, 8, 10）：
+（correctness_and_functionality）：
+0 ：，
+3 ：，
+6 ：， minor 
+8 ：，
+10 ：，，
+
+， XML ，，：
 ```xml
 <evaluation>
 <criteria_scores>
     <correctness_and_functionality>
     <score>[SCORE]</score>
-    <justification>[简短具体的理由]</justification>
+    <justification>[]</justification>
     </correctness_and_functionality>
 </criteria_scores>
 </evaluation>

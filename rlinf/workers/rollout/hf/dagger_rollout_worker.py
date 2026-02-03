@@ -390,9 +390,7 @@ class DaggerRolloutWorker(Worker):
                         if "intervene_flags" in env_output and env_output["intervene_flags"] is not None:
                             intervene_flags = env_output["intervene_flags"].bool()
 
-                            # step_t_minus_1_intervened = intervene_flags.any().item()
-                            raise ValueError("intervene_flags:", intervene_flags, intervene_flags.shape)
-                            step_t_minus_1_intervened = torch.sum(intervene_flags) > (len(intervene_flags) * 0.6)  # at least 1% of batch has intervention
+                            step_t_minus_1_intervened = torch.sum(intervene_flags) > (len(intervene_flags) * 0.6)  # at least 60% of batch has intervention
                         
                         # Priority 2: Check simulation: if expert policy was used in step t-1
                         # Only check this if no real-world intervention was detected
@@ -458,7 +456,6 @@ class DaggerRolloutWorker(Worker):
                             step_t_minus_1_intervened = bool(last_results[stage_id]["use_expert"])
                     
                     should_save = step_t_minus_1_intervened
-                    raise ValueError("not support hg-dagger's only_save_intervened now")
                 
                 if should_save:
                     self.buffer_list[stage_id].dones.append(dones)

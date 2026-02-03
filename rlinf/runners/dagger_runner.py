@@ -158,10 +158,11 @@ class DaggerRunner:
                         output_channel=self.rollout_channel,
                         actor_channel=self.actor_channel,
                     )
+                    rollout_handle.wait()
+                with self.timer("send_batch"):
                     self.actor.recv_rollout_batch(
                         input_channel=self.actor_channel
                     ).wait()
-                    rollout_handle.wait()
 
                 # compute advantages and returns.
                 with self.timer("cal_adv_and_returns"):

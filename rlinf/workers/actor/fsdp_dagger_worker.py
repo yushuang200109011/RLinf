@@ -20,6 +20,7 @@ import numpy as np
 import torch
 from omegaconf import DictConfig
 
+from rlinf.models.embodiment.base_policy import ForwardType
 from rlinf.data.replay_buffer import SACReplayBuffer
 from rlinf.scheduler import Channel
 import openpi.models.model as _model
@@ -226,7 +227,7 @@ class EmbodiedDAGGERFSDPPolicy(EmbodiedFSDPActor):
 
                 with self.amp_context:
                     losses = self.model(
-                        forward_type="sft_forward",
+                        forward_type=ForwardType.SFT,
                         data={"observation": observation, "actions": actions},
                     )
                     if isinstance(losses, (list, tuple)):

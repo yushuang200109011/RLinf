@@ -7,7 +7,7 @@ strategy: "fsdp"            # FSDP strategy: ["fsdp", "fsdp2"]
 sharding_strategy: "full_shard" 
 
 gradient_checkpointing: False # if True, gradient checkpointing will be used for FSDP/FSDP2 training, which will save memory but increase computation time.
-cpu_offload: False            # whether to offload parameters and gradients to CPU when not in use，if True, actor's enable_offload should be True too.
+cpu_offload: False            # whether to offload parameters and gradients to CPU when not in useif True, actor's enable_offload should be True too.
 offload_pin_memory: False     # whether FSDP2's CPU offload policy should pin memory when cpu_offload is True
 reshard_after_forward: True   # if True, FSDP2 will reshard parameters after forward pass to save memory
 

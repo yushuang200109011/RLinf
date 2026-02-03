@@ -68,7 +68,7 @@ Here is a detailed explanation of each configuration parameter:
 
 There are three exposed functions in `PyTorchProfiler`:
 
-- `init_fwd_bwd_schedule(self, num_minibatches)`: it will init training's schedule info using parameter `num_minibatches`，
+- `init_fwd_bwd_schedule(self, num_minibatches)`: it will init training's schedule info using parameter `num_minibatches`
     setting `schedule_wait` by `num_minibatches` -  `self.schedule_warmup` - `self.schedule_active` and check whether it's
     a legal value.
 

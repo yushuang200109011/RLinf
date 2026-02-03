@@ -9,7 +9,7 @@ from cv_bridge import CvBridge
 # msgs
 
 class SensorBase:
-    ''' ，
+    ''' 
     '''
     def __init__(self):
         pass
@@ -29,7 +29,7 @@ class Camera(SensorBase):
         self.cam3_time = rospy.Time.now()
 
     def compress_image(self,image_np):
-        """ JPEG （）"""
+        """ JPEG """
         success, encoded = cv2.imencode(".jpg", image_np)
         if not success:
             raise ValueError("")

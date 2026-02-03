@@ -5,11 +5,11 @@ from turtle2_controller.controllers import HeadController,ChassisController,Lift
 from turtle2_controller.sensors import Camera
 import time
 '''
-IO,，。
+IO,
 '''
 
 class RobotController:
-    ''' ，
+    ''' 
     '''
     def __init__(self):
         pass
@@ -51,8 +51,8 @@ class RobotController:
  
 class Turtle2Controller(RobotController):
     ''' 2
-    ： ， c = Turtle2Controller()
-     c.xxx_data() # ，
+      c = Turtle2Controller()
+     c.xxx_data() # 
      c.xxx_control(cmd) # cmd,
     '''
     def __init__(self,init_node=False):
@@ -136,7 +136,7 @@ class Turtle2Controller(RobotController):
         :param cmd_l:  [[x,y,z,roll,pitch,yaw,gripper],...]
         :param cmd_r:  [[x,y,z,roll,pitch,yaw,gripper],...]
         :param t_step: 
-        ，。，。
+        
         """
         self.arms.send_control_raw_trj(cmd_l, cmd_r, t_step)
 
@@ -218,20 +218,20 @@ class Turtle2Controller(RobotController):
 
     def chassis_stop(self):
         """ 
-        ，
+        
         """
         self.chassis.stop()
 
     def chassis_start(self):
         """ 
-        ，
+        
         """
         self.chassis.start()
 
     def chassis_control_relative_pose(self, cmd, is_arrived=False):
         ''' 
         @param cmd:  [x,y,yaw]
-        @param is_arrived: ，False
+        @param is_arrived: False
         '''
         return self.chassis.send_control_relative_pose(cmd, is_arrived)
 
@@ -279,8 +279,8 @@ class Turtle2Controller(RobotController):
 
 class MovingController(RobotController):
     ''' 2
-    ： ， c = MovingController()
-     c.xxx_data() # ，
+      c = MovingController()
+     c.xxx_data() # 
      c.xxx_control(cmd) # cmd,
     '''
     def __init__(self,init_node=False):
@@ -345,11 +345,11 @@ class MovingController(RobotController):
         :param pose_trj_l&pose_trj_r:  [[x,y,z,roll,pitch,yaw,gripper],...]
         :param pos_method: ,'linear''toppra'
         :param quaternion_interpolation_method: ,'slerp''squad'
-        :param infer_time: ，
-        :param step_time: ，
+        :param infer_time: 
+        :param step_time: 
         :param interpolation_step: 
         :method : ,'slerp''toppra'
-        @TODO:  ， 1-2  
+        @TODO:   1-2  
         '''
         self.arms.send_control_pose_trj(is_async_, pose_trj_l, pose_trj_r, pos_method, quaternion_interpolation_method, infer_time, step_time, interpolation_step)
 
@@ -359,7 +359,7 @@ class MovingController(RobotController):
         :param pose_trj_l&pose_trj_r:  [[x,y,z,roll,pitch,yaw,gripper],...]
         :param pos_method: ,'linear''toppra'
         :param quaternion_interpolation_method: ,'slerp''squad'
-        :param t_step: ，
+        :param t_step: 
         :param interpolation_step: 
         :method : ,'slerp''toppra'
         '''
@@ -371,11 +371,11 @@ class MovingController(RobotController):
         :param pose_trj_l&pose_trj_r:  [[x,y,z,roll,pitch,yaw,gripper],...]
         :param pos_method: ,'linear''toppra'
         :param quaternion_interpolation_method: ,'slerp''squad'
-        :param infer_time: ，
-        :param t_step: ，
+        :param infer_time: 
+        :param t_step: 
         :param interpolation_step: 
         :method : ,'slerp''toppra'
-        @ NOTE: 。
+        @ NOTE: 
         '''
         self.arms.send_control_pose_trj_async(pose_trj_l, pose_trj_r, pos_method, quaternion_interpolation_method, infer_time, t_step, interpolation_step)
 
@@ -384,7 +384,7 @@ class MovingController(RobotController):
         :param cmd_l:  [[x,y,z,roll,pitch,yaw,gripper],...]
         :param cmd_r:  [[x,y,z,roll,pitch,yaw,gripper],...]
         :param t_step: 
-        ，。，。
+        
         """
         self.arms.send_control_raw_trj(cmd_l, cmd_r, t_step)
     def start_arm_actions_thread(self):
@@ -465,13 +465,13 @@ class MovingController(RobotController):
 
     def chassis_stop(self):
         """ 
-        ，
+        
         """
         self.chassis.stop()
 
     def chassis_start(self):
         """ 
-        ，
+        
         """
         self.chassis.start()
 

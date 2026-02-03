@@ -127,7 +127,7 @@ class RobotControllerServer:
                 # 
                 if request:
                     kwargs = request.dict()
-                    # None（）
+                    # None
                     kwargs = {k: v for k, v in kwargs.items() if v is not None}
                 else:
                     kwargs = {}
@@ -184,7 +184,7 @@ class RobotControllerServer:
         if RequestModel:
             self.app.post(f"/api/{method_name}")(route_handler)
         else:
-            # ，GET
+            # GET
             async def get_handler():
                 return await route_handler()
             self.app.get(f"/api/{method_name}")(get_handler)
@@ -226,7 +226,7 @@ class RobotControllerServer:
 
 # 
 if __name__ == "__main__":
-    # （）
+    # 
     # 
     #  MockTurtle2Controller
     server = RobotControllerServer(

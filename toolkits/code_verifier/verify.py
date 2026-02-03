@@ -116,7 +116,7 @@ def _build_prompt(
 
     # Do not use reference as scoring reference
     judge_prompt = """
-，。，、。
+
 
 
 <prefix>{prefix}</prefix>
@@ -126,17 +126,17 @@ def _build_prompt(
 
 prefix: 
 suffix: 
-completion: LLM （ Prompt  Suffix ）。
+completion: LLM  Prompt  Suffix 
 
-， 0-10 ， 5 （0, 3, 6, 8, 10）：
-（correctness_and_functionality）：
-0 ：，
-3 ：，
-6 ：， minor 
-8 ：，
-10 ：，，
+ 0-10  5 0, 3, 6, 8, 10
+correctness_and_functionality
+0 
+3 
+6  minor 
+8 
+10 
 
-， XML ，，：
+ XML 
 ```xml
 <evaluation>
 <criteria_scores>

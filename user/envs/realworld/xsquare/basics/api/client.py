@@ -127,7 +127,7 @@ if __name__ == "__main__":
     for method_name, method_info in client.get_available_methods().items():
         print(f"  {method_name}: {method_info['doc']}")
     
-    # （）
+    # 
     try:
         print("=====  =====")
 
@@ -220,7 +220,7 @@ if __name__ == "__main__":
 #         return data
     
 #     def emergency_stop(self):
-#         """（）"""
+#         """"""
 #         try:
 #             # 
 #             self.chassis_control_vel([0, 0, 0])

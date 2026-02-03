@@ -20,7 +20,7 @@ from nav_msgs.msg import Path
 
 robot_type = os.environ.get('ROBOT_TYPE', 'TURTLE2')
 if robot_type == 'TURTLE2':
-    trajectory_smooth_path = "/home/arm/prj/turtle2/modules/src/trajectory_smooth"
+    trajectory_smooth_path = "turtle2/modules/src/trajectory_smooth"
     sys.path.append(trajectory_smooth_path)
     from src.TrajectorySmooth import TrajectorySmooth
     from turtle2_msgs_srvs.msg import HeadInfo
@@ -31,7 +31,7 @@ if robot_type == 'TURTLE2':
     from turtle2_controller.kinematics import kinematics
     from turtle2_controller.utils import quaternion_to_euler, pose_transformation
 else:#
-    trajectory_smooth_path = "/home/arm/prj/hybrid-robot/rosWorkspace/src/trajectory_smooth"
+    trajectory_smooth_path = "hybrid-robot/rosWorkspace/src/trajectory_smooth"
     sys.path.append(trajectory_smooth_path)
     from turtle2_controller.kinematics import kinematics
     from src.TrajectorySmooth import TrajectorySmooth
@@ -40,7 +40,7 @@ else:#
 
 
 class ControllerBase:
-    ''' ，
+    ''' 
     '''
     def __init__(self):
         pass
@@ -209,22 +209,22 @@ class ChassisController(ControllerBase):
 
     def chassis_pose_control_thread_callback(self):
         """
-        @todo:，。
+        @todo:
         """
         target = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0] # [x,y,z,ox,oy,oz,ow]
         at_goal = False
         count = 0 
         while True:
-            # ，
+            # 
             if self.target_queue.empty(): 
                 time.sleep(0.1)
                 continue
-            else: # ，
+            else: # 
                 at_goal = False
-                # self.stop_moving_signal = False #，
+                # self.stop_moving_signal = False #
                 count = 0
                 target = self.target_queue.get()
-            if at_goal: # ，
+            if at_goal: # 
                 time.sleep(0.1)
                 continue
             if self.stop_moving_signal: # 
@@ -305,7 +305,7 @@ class ChassisController(ControllerBase):
         return [pos[0], pos[1], yaw]
     
     def pose_data(self):
-        ''' ，
+        ''' 
         :return: [x,y,yaw]
         '''
         pos = self.chassis_pose[0:3]
@@ -313,7 +313,7 @@ class ChassisController(ControllerBase):
         return [pos[0], pos[1], yaw]
 
     def posori_data(self):
-        ''' ，
+        ''' 
         :return: [x,y,z,ox,oy,oz,ow]
         '''
         return copy.deepcopy(self.chassis_pose)
@@ -367,7 +367,7 @@ class ChassisController(ControllerBase):
     def send_control_vel(self,cmd):
         ''' 
         :param cmd:  cmd = [vx,vy,yaw] 
-        @todo:，，。
+        @todo:
         '''
         # if not self.check_cmd(cmd):
         #     rospy.logerr("Invalid command: %s" % cmd)
@@ -505,7 +505,7 @@ class ChassisController(ControllerBase):
     
     def optimize_global_path_control(self,path):
         ''' 
-        @todo: ，
+        @todo: 
         param path:   [ [x,y,z,ox,oy,oz,ow], ... ]
         @warning: 
         '''
@@ -526,16 +526,13 @@ class ChassisController(ControllerBase):
             path_msg.poses.append(pose_msg)
         path_msg.header.stamp = rospy.Time.now()
         path_msg.header.frame_id = 'map'
-        # ，
+        # 
         try: self.opimize_path_pub.publish(path_msg)
         except Exception as e:
             rospy.logerr("msg send failed: %s" % e)
             return False
     
     def optimize_rel_pathxyY_control(self, path):
-        ''' ,path = [[x,y,yaw], ...]
-        @warning : 
-        '''
         if type(path) != list:
             rospy.logerr("path must be a list")
             return False
@@ -599,7 +596,7 @@ class LiftController(ControllerBase):
             rospy.logerr("Invalid command: %s" % cmd)
             return
 
-        req = LiftControlRequest(cmd=1, position=cmd) # cmd=1，。
+        req = LiftControlRequest(cmd=1, position=cmd) # cmd=1
         try: self.lift_control_cli(req)
         except rospy.ServiceException as e:
             rospy.logerr("Service call failed: %s" % e)
@@ -722,7 +719,7 @@ class ArmsController(ControllerBase):
         ''' 
         :param target_l&target_r:  [x,y,z,roll,pitch,yaw,gripper]
         :param steps: 
-        :todo: ！！！！！！！！！！！！
+        :todo: 
         '''
         if len(target_l[0]) != 7 or len(target_r[0]) !=7:
             rospy.logerr("cmd_l and cmd_r points must be of length 7")
@@ -744,7 +741,7 @@ class ArmsController(ControllerBase):
     def send_control_raw_trj(self, cmd_l : list, cmd_r : list, t_step=0.005):
         ''' 
         :param cmd_l&cmd_r:  [[x,y,z,roll,pitch,yaw,gripper],...]
-        :param t_step: ，
+        :param t_step: 
         '''
         if len(cmd_l) != len(cmd_r):
             rospy.logerr("cmd_l and cmd_r must have the same length")
@@ -765,12 +762,12 @@ class ArmsController(ControllerBase):
             pos_method='linear', quaternion_interpolation_method="slerp", infer_time=0.5, t_step=0.005, interpolation_step=200):
         """ 
         :param pose_trj_l&pose_trj_r: 
-        :param pos_method: ，'linear' or 'toppra'
-        :param quaternion_interpolation_method: ，'slerp' or 'squad'
-        :param infer_time: ，
-        :param t_step: ，
+        :param pos_method: 'linear' or 'toppra'
+        :param quaternion_interpolation_method: 'slerp' or 'squad'
+        :param infer_time: 
+        :param t_step: 
         :param interpolation_step: 
-        @ NOTE: 。
+        @ NOTE: 
         """
         if self.arm_action_thread is None:
             raise RuntimeError("Please start the arm action thread first by calling start_arm_actions_thread()")
@@ -825,11 +822,11 @@ class ArmsController(ControllerBase):
              pos_method='linear', quaternion_interpolation_method="slerp" , t_step=0.005, interpolation_step=200):
         """ 
         :param pose_trj_l&pose_trj_r: . [[x,y,z,roll,pitch,yaw,gripper],...]
-        :param pos_method: ，'linear' or 'toppra'
-        :param quaternion_interpolation_method: ，'slerp' or 'squad'
-        :param t_step: ，
+        :param pos_method: 'linear' or 'toppra'
+        :param quaternion_interpolation_method: 'slerp' or 'squad'
+        :param t_step: 
         :param interpolation_step: 
-        @TODO : 。
+        @TODO : 
         """
         pose_trj_l = np.array(pose_trj_l, dtype=np.float32)
         pose_trj_r = np.array(pose_trj_r, dtype=np.float32)
@@ -868,14 +865,14 @@ class ArmsController(ControllerBase):
     def send_control_pose_trj(self, is_async_: bool ,pose_trj_l, pose_trj_r, \
             pos_method='linear', quaternion_interpolation_method="slerp" ,infer_time=0.5, t_step=0.005, interpolation_step=200):
         ''' 
-        :param is_async_: ，True，False
+        :param is_async_: TrueFalse
         :param pose_trj_l&pose_trj_r:  [[x,y,z,roll,pitch,yaw,gripper],...]
-        :param pos_method: ，'linear' or 'toppra'
-        :param quaternion_interpolation_method: ，'slerp' or 'squad'
-        :param infer_time: ，
-        :param t_step: ，
+        :param pos_method: 'linear' or 'toppra'
+        :param quaternion_interpolation_method: 'slerp' or 'squad'
+        :param infer_time: 
+        :param t_step: 
         :param interpolation_step: 
-        @TODO:  ， 1-2 
+        @TODO:   1-2 
         '''
         pose_trj_l = np.array(pose_trj_l, dtype=np.float32)
         pose_trj_r = np.array(pose_trj_r, dtype=np.float32)
@@ -951,19 +948,19 @@ class ArmsController(ControllerBase):
         while True:
             with self.lock:
                 if self.infer_request: return
-            time.sleep(0.1)  # ，infer_request
+            time.sleep(0.1)  # infer_request
 
     def arm_action_loop(self):
         len_trajs = 0
         while len_trajs == 0: 
             with self.lock:
                 len_trajs = len(self.arm_trajs)
-            time.sleep(0.1)  # ，arm_trajs
+            time.sleep(0.1)  # arm_trajs
         # 
         print("")
         with self.lock: traj = self.arm_trajs.pop(0)
-        actions1 = list(traj["arml"])  # ，
-        actions2 = list(traj["armr"])  # ，
+        actions1 = list(traj["arml"])  # 
+        actions2 = list(traj["armr"])  # 
         exit_step = traj["exit_step"] #
         t_step = traj["t_step"]
         count = 0
@@ -978,13 +975,13 @@ class ArmsController(ControllerBase):
                 count += 1
                 time.sleep(t_step)
 
-            # ，
+            # 
             len_trajs = 0
             # 
             while len_trajs == 0:
                 print("...")
                 with self.lock: len_trajs = len(self.arm_trajs)
-                time.sleep(0.1)  # ，arm_trajs
+                time.sleep(0.1)  # arm_trajs
             # 
             with self.lock: traj = self.arm_trajs.pop(0)
             actions1 = list(traj["arml"])

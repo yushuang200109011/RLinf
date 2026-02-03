@@ -75,7 +75,7 @@ class FrankaRobotConfig:
     enable_gripper_penalty: bool = True
     gripper_penalty: float = 0.1
     save_video_path: Optional[str] = None
-    joint_reset_cycle: int = 20000  # Number of resets before resetting joints
+    joint_reset_cycle: int = 200  # Number of resets before resetting joints
 
 
 class FrankaEnv(gym.Env):
@@ -142,6 +142,8 @@ class FrankaEnv(gym.Env):
         self._open_cameras()
         # Video player for displaying camera frames
         self.camera_player = VideoPlayer(self.config.enable_camera_player)
+
+        self.last_gripper_act = time.time()
 
     def _setup_hardware(self):
         from .franka_controller import FrankaController
@@ -260,7 +262,7 @@ class FrankaEnv(gym.Env):
         else:
             return 0.0
 
-    def reset(self, *, seed=None, options=None):
+    def reset(self, joint_reset=False, seed=None, options=None):
         if self.config.is_dummy:
             observation = self._get_observation()
             return observation, {}

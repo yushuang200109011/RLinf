@@ -21,7 +21,7 @@ cluster:
       hardware:
         type: Franka
         configs:
-          - robot_ip: 10.100.25.2
+          - robot_ip: 10.100.25.107
             node_rank: 0
             camera_serials: ["233522071854", "233622071355"]
 
@@ -32,7 +32,7 @@ runner:
     project_name: rlinf
     experiment_name: "collect-data"
     logger_backends: ["tensorboard"] # wandb, swanlab
-  num_data_episodes: 20
+  num_data_episodes: 12
   record_task_description: False
 
 env:
@@ -46,7 +46,7 @@ env:
     override_cfg:
       enable_random_reset: False
       target_ee_pose: [4.88791729e-01, -2.57317177e-03, 0, -3.13894874e+00, 1.49390026e-02, 4.68428620e-03]
-      random_xy_range: 0.15
-      random_z_range_low: 0.01
-      random_z_range_high: 0.15
-      random_rz_range: 0.5
+      random_xy_range: 0.4
+      random_z_range_low: 0.015
+      random_z_range_high: 0.25
+      random_rz_range: 1.0

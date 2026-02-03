@@ -104,17 +104,18 @@ class DataCollector(Worker):
                 self.log_info(
                     f"{reward}\tGot {success_cnt} successes of {self.total_cnt} trials. {self.num_data_episodes} successes needed."
                 )
+                save_file_path = os.path.join(self.cfg.runner.logger.log_path, f"data_{self.total_cnt}.pkl")
+                with open(save_file_path, "wb") as f:
+                    pkl.dump(self.data_list, f)
+                    self.log_info(
+                        f"Saved demo {self.total_cnt} with {len(self.data_list)} samples to {save_file_path}"
+                    )
+                self.data_list = []
+                input("press enter")
                 obs, _ = self.env.reset()
                 progress_bar.update(1)
             else:
                 self.log_info("Done is False, continue current episode.")
-
-        save_file_path = os.path.join(self.cfg.runner.logger.log_path, "data.pkl")
-        with open(save_file_path, "wb") as f:
-            pkl.dump(self.data_list, f)
-            self.log_info(
-                f"Saved {self.num_data_episodes} demos with {len(self.data_list)} samples to {save_file_path}"
-            )
 
         self.env.close()
 

@@ -67,6 +67,9 @@ class EnvWorker(Worker):
             self.eval_num_envs_per_stage = (
                 self.cfg.env.eval.total_num_envs // self._world_size // self.stage_num
             )
+        
+        self.train_queue = Channel.create(name="train_queue", local=True)
+        self.eval_queue = Channel.create(name="eval_queue", local=True)
 
     def init_worker(self):
         self.enable_offload = self.cfg.env.enable_offload

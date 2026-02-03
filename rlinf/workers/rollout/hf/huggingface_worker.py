@@ -56,6 +56,12 @@ class MultiStepRolloutWorker(Worker):
         self.model_weights_id = ""
         self.count_update = 0
 
+        self.gather_num = self.placement.get_world_size(
+            "rollout"
+        ) // self.placement.get_world_size("env")
+        self.train_queue = Channel.create(name="train_queue", local=True)
+        self.eval_queue = Channel.create(name="eval_queue", local=True)
+
         # Sync weight comm options
         max_ctas = cfg.rollout.get("sync_weight_nccl_max_ctas", None)
         min_ctas = cfg.rollout.get("sync_weight_nccl_min_ctas", None)
@@ -238,7 +244,7 @@ class MultiStepRolloutWorker(Worker):
                 if env_output["final_obs"] is not None:
                     env_output["final_obs"].pop("task_descriptions", None)
                 chunk_step_result = ChunkStepResult(
-                    actions=result.get("action", None),
+                    actions=result.get("chunk_actions", None),
                     dones=dones,
                     rewards=rewards,
                     truncations=env_output["truncations"],

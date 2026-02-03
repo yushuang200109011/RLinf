@@ -232,7 +232,7 @@ class MLPPolicy(nn.Module, BasePolicy):
             action = raw_action
 
         chunk_actions = action.reshape(-1, self.num_action_chunks, self.action_dim)
-        chunk_actions = chunk_actions.cpu().numpy()
+        chunk_actions_np = chunk_actions.cpu().numpy()
 
         if hasattr(self, "value_head") and calculate_values:
             chunk_values = self.value_head(env_obs["states"])
@@ -244,11 +244,12 @@ class MLPPolicy(nn.Module, BasePolicy):
             forward_inputs["states"] = env_obs["states"]
 
         result = {
+            "chunk_actions": chunk_actions,
             "prev_logprobs": chunk_logprobs,
             "prev_values": chunk_values,
             "forward_inputs": forward_inputs,
         }
-        return chunk_actions, result
+        return chunk_actions_np, result
 
     def sac_q_forward(self, obs, actions, shared_feature=None, detach_encoder=False):
         return self.q_head(obs["states"], actions)

@@ -228,25 +228,26 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
             ),
         )
 
-        if self.cfg.algorithm.get("demo_buffer", {}).get("load_path", None) is not None:
-            storage_dir = self.cfg.algorithm.demo_buffer.get("storage_dir", None)
-            if storage_dir is None:
-                storage_dir = os.path.join(
-                    self.cfg.runner.logger.log_path, f"demo_buffer/rank_{self._rank}"
-                )
-            else:
-                storage_dir = os.path.join(storage_dir, f"rank_{self._rank}")
-            self.demo_buffer = TrajectoryReplayBuffer(
-                seed=seed,
-                storage_dir=storage_dir,
-                storage_format="pt",
-                enable_cache=self.cfg.algorithm.demo_buffer.enable_cache,
-                cache_size=self.cfg.algorithm.demo_buffer.cache_size,
-                sample_window_size=self.cfg.algorithm.demo_buffer.sample_window_size,
-                save_trajectories=self.cfg.algorithm.demo_buffer.get(
-                    "save_trajectories", True
-                ),
+        
+        storage_dir = self.cfg.algorithm.demo_buffer.get("storage_dir", None)
+        if storage_dir is None:
+            storage_dir = os.path.join(
+                self.cfg.runner.logger.log_path, f"demo_buffer/rank_{self._rank}"
             )
+        else:
+            storage_dir = os.path.join(storage_dir, f"rank_{self._rank}")
+        self.demo_buffer = TrajectoryReplayBuffer(
+            seed=seed,
+            storage_dir=storage_dir,
+            storage_format="pt",
+            enable_cache=self.cfg.algorithm.demo_buffer.enable_cache,
+            cache_size=self.cfg.algorithm.demo_buffer.cache_size,
+            sample_window_size=self.cfg.algorithm.demo_buffer.sample_window_size,
+            save_trajectories=self.cfg.algorithm.demo_buffer.get(
+                "save_trajectories", True
+            ),
+        )
+        if self.cfg.algorithm.get("demo_buffer", {}).get("load_path", None) is not None:
             self.demo_buffer.load_checkpoint(
                 self.cfg.algorithm.demo_buffer.load_path,
                 is_distributed=True,
@@ -299,6 +300,16 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
             recv_list.append(trajectory)
 
         self.replay_buffer.add_trajectories(recv_list)
+        
+        intervene_traj_list = []
+        for traj in recv_list:
+            assert isinstance(traj, Trajectory)
+            intervene_traj = traj.extract_intervene_traj()
+            if intervene_traj is not None:
+                intervene_traj_list.append(intervene_traj)
+        
+        if len(intervene_traj_list) > 0:
+            self.demo_buffer.add_trajectories(intervene_traj)
 
     @Worker.timer("forward_critic")
     def forward_critic(self, batch):
@@ -310,6 +321,9 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
 
         curr_obs = batch["curr_obs"]
         next_obs = batch["next_obs"]
+        actions = batch["actions"]
+        actions = actions.reshape(actions.shape[0], -1)
+
         with torch.no_grad():
             kwargs = {}
             if SupportedModel(self.cfg.actor.model.model_type) in [
@@ -371,17 +385,13 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
             all_data_q_values = self.model(
                 forward_type=ForwardType.SAC_Q,
                 obs=curr_obs,
-                actions=batch["forward_inputs"]["action"]
-                if "action" in batch["forward_inputs"]
-                else batch["action_tokens"],
+                actions=actions
             )
         else:
             all_data_q_values, all_qf_next = self.model(
                 forward_type=ForwardType.CROSSQ_Q,
                 obs=curr_obs,
-                actions=batch["forward_inputs"]["action"]
-                if "action" in batch["forward_inputs"]
-                else batch["action_tokens"],
+                actions=actions, 
                 next_obs=next_obs,
                 next_actions=next_state_actions,
             )
@@ -480,7 +490,7 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
         )
 
         with self.worker_timer("sample"):
-            if self.demo_buffer is not None:
+            if self.demo_buffer is not None and self.demo_buffer.is_ready(self.cfg.algorithm.demo_buffer.min_buffer_size):
                 replay_batch = self.replay_buffer.sample(
                     num_chunks=global_batch_size_per_rank // 2
                 )
@@ -583,6 +593,11 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
             f"replay_buffer/{key}": value for key, value in replay_buffer_stats.items()
         }
         append_to_dict(metrics, replay_buffer_stats)
+        demo_buffer_stats = self.demo_buffer.get_stats()
+        demo_buffer_stats = {
+            f"demo_buffer/{key}": value for key, value in demo_buffer_stats.items()
+        }
+        append_to_dict(metrics, demo_buffer_stats)
         # Average metrics across updates
         mean_metric_dict = {}
         for key, value in metrics.items():

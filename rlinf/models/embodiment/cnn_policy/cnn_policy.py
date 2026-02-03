@@ -343,13 +343,13 @@ class CNNPolicy(nn.Module, BasePolicy):
         chunk_actions = action.reshape(
             -1, self.cfg.num_action_chunks, self.cfg.action_dim
         )
-        chunk_actions = chunk_actions.cpu().numpy()
+        chunk_actions_np = chunk_actions.cpu().numpy()
 
         if hasattr(self, "value_head") and calculate_values:
             chunk_values = self.value_head(mix_feature)
         else:
             chunk_values = torch.zeros_like(chunk_logprobs[..., :1])
-        forward_inputs = {"action": action}
+        forward_inputs = {}
         if return_obs:
             forward_inputs["main_images"] = env_obs["main_images"]
             forward_inputs["states"] = env_obs["states"]
@@ -357,13 +357,14 @@ class CNNPolicy(nn.Module, BasePolicy):
                 forward_inputs["extra_view_images"] = env_obs["extra_view_images"]
 
         result = {
+            "chunk_actions": chunk_actions,
             "prev_logprobs": chunk_logprobs,
             "prev_values": chunk_values,
             "forward_inputs": forward_inputs,
         }
         if return_shared_feature:
             result["shared_feature"] = full_feature
-        return chunk_actions, result
+        return chunk_actions_np, result
 
     def sac_q_forward(self, obs, actions, shared_feature=None, detach_encoder=False):
         if shared_feature is None:

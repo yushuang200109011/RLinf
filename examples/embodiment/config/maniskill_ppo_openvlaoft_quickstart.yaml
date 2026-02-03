@@ -21,7 +21,7 @@ runner:
   task_type: embodied
   logger:
     log_path: "../results"
-    project_name: rlinf
+    project_name: user
     experiment_name: "maniskill_ppo_openvlaoft_quickstart"
     logger_backends: ["tensorboard"] # wandb, swanlab
 
@@ -131,7 +131,7 @@ actor:
 
     add_value_head: True
     is_lora: True
-    # aka RLinf-OpenVLAOFT-ManiSkill-Base-Lora. It can be downloaded from https://huggingface.co/RLinf/RLinf-OpenVLAOFT-ManiSkill-Base-Lora
+    # aka USER-OpenVLAOFT-ManiSkill-Base-Lora. It can be downloaded from https://huggingface.co/USER/USER-OpenVLAOFT-ManiSkill-Base-Lora
     lora_path: /path/to/models/oft-sft/lora_004000/
 
     max_prompt_length: 30

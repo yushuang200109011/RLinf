@@ -23,5 +23,5 @@ model:
   unnorm_key: bridge_orig
   is_lora: True
   lora_rank: 32
-  lora_path: /path/to/RLinf-OpenVLAOFT-LIBERO-130-Base-Lora/lora_adapter
+  lora_path: /path/to/USER-OpenVLAOFT-LIBERO-130-Base-Lora/lora_adapter
   max_prompt_length: 30

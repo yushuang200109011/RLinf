@@ -1,4 +1,4 @@
-# Copyright 2025 The RLinf Authors.
+# Copyright 2025 The USER Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -34,7 +34,7 @@ def load_prompt_from_json(json_path, env_name):
     return prompt_data.get(env_name, "")
 
 
-PROMPT_JSON_PATH = "rlinf/envs/metaworld/metaworld_config.json"
+PROMPT_JSON_PATH = "user/envs/metaworld/metaworld_config.json"
 with open(PROMPT_JSON_PATH, "r") as f:
     config_data = json.load(f)
 task_description_dict = config_data.get("TASK_DESCRIPTIONS", {})

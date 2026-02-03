@@ -23,7 +23,7 @@ runner:
   task_type: embodied
   logger:
     log_path: "./logs"
-    project_name: rlinf
+    project_name: user
     experiment_name: "maniskill_grpo_openvla"
     logger_backends: ["tensorboard"] # wandb, swanlab
 

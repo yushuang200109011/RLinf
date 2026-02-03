@@ -1,4 +1,4 @@
-# Copyright 2025 The RLinf Authors.
+# Copyright 2025 The USER Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,14 +18,14 @@ import hydra
 import torch.multiprocessing as mp
 from omegaconf.omegaconf import OmegaConf
 
-from rlinf.config import validate_cfg
-from rlinf.runners.dagger_runner import DaggerRunner
-from rlinf.scheduler import Cluster
-from rlinf.utils.placement import HybridComponentPlacement
-from rlinf.workers.env.env_worker import EnvWorker
-from rlinf.workers.rollout.hf.huggingface_worker import MultiStepRolloutWorker
-from rlinf.workers.rollout.hf.dagger_rollout_worker import DaggerRolloutWorker
-from rlinf.workers.actor.fsdp_dagger_worker import EmbodiedDAGGERFSDPPolicy
+from user.config import validate_cfg
+from user.runners.dagger_runner import DaggerRunner
+from user.scheduler import Cluster
+from user.utils.placement import HybridComponentPlacement
+from user.workers.env.env_worker import EnvWorker
+from user.workers.rollout.hf.huggingface_worker import MultiStepRolloutWorker
+from user.workers.rollout.hf.dagger_rollout_worker import DaggerRolloutWorker
+from user.workers.actor.fsdp_dagger_worker import EmbodiedDAGGERFSDPPolicy
 
 mp.set_start_method("spawn", force=True)
 
@@ -62,7 +62,7 @@ def main(cfg) -> None:
 
     demo_buffer = None
     if cfg.get("data", None):
-        from rlinf.data.datasets import create_rl_dataset
+        from user.data.datasets import create_rl_dataset
 
         demo_buffer, _ = create_rl_dataset(cfg, tokenizer=None)
 

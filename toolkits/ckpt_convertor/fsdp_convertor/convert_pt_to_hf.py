@@ -1,4 +1,4 @@
-# Copyright 2025 The RLinf Authors.
+# Copyright 2025 The USER Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@ import os
 import hydra
 import torch
 
-from rlinf.models import get_model
+from user.models import get_model
 from toolkits.ckpt_convertor.fsdp_convertor.utils import (
     copy_model_config_and_code,
     get_model_save_helper,

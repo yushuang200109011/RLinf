@@ -1,0 +1,465 @@
+# Copyright 2025 The USER Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import copy
+import gc
+from typing import Any
+import asyncio
+import torch
+from omegaconf import DictConfig, OmegaConf, open_dict
+from tqdm import tqdm
+import time
+
+from user.config import SupportedModel
+from user.data.embodied_io_struct import (
+    ChunkStepResult,
+    EmbodiedRolloutResult,
+    Trajectory,
+)
+from user.models import get_model
+from user.scheduler import Channel, Cluster, CollectiveGroupOptions, Worker
+from user.utils.metric_utils import compute_split_num
+from user.utils.placement import HybridComponentPlacement
+from user.utils.utils import get_model_weights_id
+
+
+class MultiStepRolloutWorker(Worker):
+    def __init__(self, cfg: DictConfig):
+        Worker.__init__(self)
+
+        self.cfg = cfg
+        self.should_stop = False
+
+        self.actor_group_name = cfg.actor.group_name
+        self.device = torch.cuda.current_device()
+
+        self.num_pipeline_stages = cfg.rollout.pipeline_stage_num
+        self.enable_offload = self.cfg.rollout.get("enable_offload", False)
+
+        self.placement = HybridComponentPlacement(cfg, Cluster())
+
+        actor_world_size = self.placement.get_world_size("actor")
+        self.actor_weight_src_rank = self._rank % actor_world_size
+
+        self.collect_transitions = self.cfg.rollout.get("collect_transitions", False)
+        self.model_weights_id = ""
+        self.count_update = 0
+
+        self.gather_num = self.placement.get_world_size(
+            "rollout"
+        ) // self.placement.get_world_size("env")
+        self.train_queue = Channel.create(name="train_queue", local=True)
+        self.eval_queue = Channel.create(name="eval_queue", local=True)
+
+        # Sync weight comm options
+        max_ctas = cfg.rollout.get("sync_weight_nccl_max_ctas", None)
+        min_ctas = cfg.rollout.get("sync_weight_nccl_min_ctas", None)
+        self._sync_weight_comm_options = CollectiveGroupOptions(
+            accel_max_ctas=max_ctas, accel_min_ctas=min_ctas
+        )
+
+    def init_worker(self):
+        rollout_model_config = copy.deepcopy(self.cfg.actor.model)
+        with open_dict(rollout_model_config):
+            rollout_model_config.precision = self.cfg.rollout.model.precision
+            rollout_model_config.model_path = self.cfg.rollout.model.model_path
+
+        self.hf_model = get_model(rollout_model_config)
+
+        if self.cfg.runner.get("ckpt_path", None):
+            model_dict = torch.load(self.cfg.runner.ckpt_path)
+            self.hf_model.load_state_dict(model_dict)
+
+        self.hf_model.eval()
+
+        self.setup_sample_params()
+        if self.enable_offload:
+            self.offload_model()
+
+    def setup_sample_params(self):
+        # length parameters for rollout
+        self._length_params = OmegaConf.to_container(
+            self.cfg.algorithm.length_params, resolve=True
+        )
+        # sampling parameters for rollout
+        self._sampling_params = OmegaConf.to_container(
+            self.cfg.algorithm.sampling_params, resolve=True
+        )
+        self._train_sampling_params = {
+            "do_sample": self._sampling_params["do_sample"],
+            "temperature": self._sampling_params["temperature_train"]
+            if self._sampling_params["do_sample"]
+            else 1.0,
+            "top_k": self._sampling_params["top_k"],
+            "top_p": self._sampling_params["top_p"],
+            "max_new_tokens": self._length_params["max_new_token"],
+        }
+
+        self._eval_sampling_params = {
+            "do_sample": True
+            if self._sampling_params.get("temperature_eval", -1) > 0
+            else False,
+            "temperature": self._sampling_params["temperature_eval"],
+            "top_k": self._sampling_params["top_k"],
+            "top_p": self._sampling_params["top_p"],
+            "max_new_tokens": self._length_params["max_new_token"],
+        }
+
+    @Worker.timer("predict")
+    def predict(self, env_obs, mode="train"):
+        kwargs = (
+            self._train_sampling_params
+            if mode == "train"
+            else self._eval_sampling_params
+        )
+
+        if SupportedModel(self.cfg.actor.model.model_type) in [
+            SupportedModel.OPENPI,
+            SupportedModel.MLP_POLICY,
+            SupportedModel.GR00T,
+            SupportedModel.CNN_POLICY,
+        ]:
+            kwargs = {"mode": mode}
+
+        if SupportedModel(self.cfg.actor.model.model_type) in [
+            SupportedModel.CNN_POLICY,
+            SupportedModel.FLOW_POLICY,
+            SupportedModel.MLP_POLICY,
+        ]:
+            kwargs["return_obs"] = not hasattr(self.hf_model, "q_head")
+
+        with torch.no_grad():
+            actions, result = self.hf_model.predict_action_batch(
+                env_obs=env_obs,
+                **kwargs,
+            )
+
+        return actions, result
+
+    def get_dones_and_rewards(
+        self,
+        env_output: dict[str, torch.Tensor],
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None, dict[str, Any] | None]:
+        """
+        Get dones and rewards from environment batch, handling auto_reset if needed.
+
+        Args:
+            env_output: Environment batch containing dones, rewards, and optionally final_obs
+
+        Returns:
+            Tuple of (dones, rewards). dones and rewards are tensors.
+        """
+        # First step: no rewards yet, only dones
+        if env_output["rewards"] is None:
+            return (
+                env_output["dones"].bool().cpu().contiguous(),
+                None,
+            )
+
+        dones = env_output["dones"].bool().cpu().contiguous()
+        rewards = env_output["rewards"].cpu().contiguous()
+
+        # Handle auto_reset: add bootstrap value to rewards for done episodes
+        # Note: currently this is not correct for chunk-size>1 with partial reset
+        if dones.any() and self.cfg.env.train.auto_reset:
+            if hasattr(self.hf_model, "value_head") or hasattr(self.hf_model, "q_head"):
+                final_obs = env_output["final_obs"]
+                with torch.no_grad():
+                    actions, result = self.predict(final_obs)
+                    if "prev_values" in result:
+                        _final_values = result["prev_values"]
+                    else:
+                        _final_values = torch.zeros_like(actions[:, 0])
+                final_values = torch.zeros_like(_final_values[:, 0])  # [bsz, ]
+                last_step_dones = dones[:, -1]  # [bsz, ]
+
+                final_values[last_step_dones] = _final_values[:, 0][last_step_dones]
+
+                # Add bootstrap value to the last step of done episodes
+                rewards[:, -1] += self.cfg.algorithm.gamma * final_values.cpu()
+
+        return dones, rewards
+
+    async def sync_model_from_actor(self):
+        """Sync model parameters from the actor worker."""
+        param_state_dict = await self.recv(
+            self.actor_group_name,
+            src_rank=self.actor_weight_src_rank,
+            async_op=True,
+            options=self._sync_weight_comm_options,
+        ).async_wait()
+
+        self.hf_model.load_state_dict(param_state_dict)
+        self.model_weights_id = (
+            str(get_model_weights_id(self.hf_model)) + f"_{self.count_update}"
+        )
+        self.count_update += 1
+
+        del param_state_dict
+        gc.collect()
+        torch.cuda.empty_cache()
+
+    async def send_rollout_trajectories(
+        self, rollout_result: EmbodiedRolloutResult, channel: Channel
+    ):
+        split_num = self.get_actor_split_num()
+        trajectories: Trajectory = rollout_result.to_splited_trajectories(split_num)
+        for trajectory in trajectories:
+            channel.put(trajectory, async_op=True)
+
+    @Worker.timer("generate_one_epoch")
+    async def generate_one_epoch(self, input_channel: Channel, output_channel: Channel):
+        n_chunk_steps = (
+            self.cfg.env.train.max_steps_per_rollout_epoch
+            // self.cfg.actor.model.num_action_chunks
+        )
+
+        last_obs = [None for i in range(self.num_pipeline_stages)]
+        for _ in range(n_chunk_steps):
+            for stage_id in range(self.num_pipeline_stages):
+                env_output = await self.recv_env_output(input_channel)
+
+                if env_output["intervene_actions"] is not None:
+                    self.rollout_results[stage_id].update_last_actions(
+                        env_output["intervene_actions"],
+                        env_output["intervene_flags"],
+                    )
+
+                dones, rewards = self.get_dones_and_rewards(env_output)
+
+                actions, result = self.predict(env_output["obs"])
+
+                env_output["obs"].pop("task_descriptions", None)
+                if env_output["final_obs"] is not None:
+                    env_output["final_obs"].pop("task_descriptions", None)
+                chunk_step_result = ChunkStepResult(
+                    actions=result.get("chunk_actions", None),
+                    dones=dones,
+                    rewards=rewards,
+                    truncations=env_output["truncations"],
+                    terminations=env_output["terminations"],
+                    prev_logprobs=result["prev_logprobs"]
+                    if self.cfg.rollout.get("collect_prev_infos", True)
+                    else None,
+                    prev_values=result["prev_values"]
+                    if self.cfg.rollout.get("collect_prev_infos", True)
+                    else None,
+                    forward_inputs=result["forward_inputs"],
+                )
+
+                self.rollout_results[stage_id].append_step_result(chunk_step_result)
+                if self.collect_transitions and last_obs[stage_id] is not None:
+                    curr_obs = last_obs[stage_id]
+                    next_obs = (
+                        env_output["final_obs"]
+                        if dones.any() and self.cfg.env.train.auto_reset
+                        else env_output["obs"]
+                    )
+                    self.rollout_results[stage_id].append_transitions(
+                        curr_obs, next_obs
+                    )
+
+                last_obs[stage_id] = env_output["obs"]
+
+                self.send_chunk_actions(output_channel, actions)
+
+        for stage_id in range(self.num_pipeline_stages):
+            env_output = await self.recv_env_output(input_channel)
+
+            if env_output["intervene_actions"] is not None:
+                self.rollout_results[stage_id].update_last_actions(
+                    env_output["intervene_actions"], env_output["intervene_flags"]
+                )
+
+            dones, rewards = self.get_dones_and_rewards(env_output)
+
+            _, result = self.predict(env_output["obs"])
+
+            env_output["obs"].pop("task_descriptions", None)
+            if env_output["final_obs"] is not None:
+                env_output["final_obs"].pop("task_descriptions", None)
+
+            chunk_step_result = ChunkStepResult(
+                dones=dones,
+                rewards=rewards,
+                truncations=env_output["truncations"],
+                terminations=env_output["terminations"],
+                prev_logprobs=None,
+                prev_values=result["prev_values"]
+                if self.cfg.rollout.get("collect_prev_infos", True)
+                else None,
+                forward_inputs=None,
+            )
+
+            self.rollout_results[stage_id].append_step_result(chunk_step_result)
+            if self.collect_transitions and last_obs[stage_id] is not None:
+                curr_obs = last_obs[stage_id]
+                next_obs = (
+                    env_output["final_obs"]
+                    if dones.any() and self.cfg.env.train.auto_reset
+                    else env_output["obs"]
+                )
+                self.rollout_results[stage_id].append_transitions(curr_obs, next_obs)
+
+    async def generate(
+        self, input_channel: Channel, output_channel: Channel, actor_channel: Channel
+    ):
+        if self.enable_offload:
+            self.reload_model()
+
+        # rollout_results[stage_id]
+        self.rollout_results: list[EmbodiedRolloutResult] = [
+            EmbodiedRolloutResult(
+                max_episode_length=self.cfg.env.train.max_episode_steps,
+                model_weights_id=self.model_weights_id,
+            )
+            for _ in range(self.num_pipeline_stages)
+        ]
+
+        for _ in tqdm(
+            range(self.cfg.algorithm.rollout_epoch),
+            desc="Generating Rollout Epochs",
+            disable=(self._rank != 0),
+        ):
+            await self.generate_one_epoch(input_channel, output_channel)
+
+        for stage_id in range(self.num_pipeline_stages):
+            await self.send_rollout_trajectories(
+                self.rollout_results[stage_id], actor_channel
+            )
+
+        if self.enable_offload:
+            self.offload_model()
+
+    async def evaluate(self, input_channel: Channel, output_channel: Channel):
+        if self.enable_offload:
+            self.reload_model()
+
+        n_chunk_steps = (
+            self.cfg.env.eval.max_steps_per_rollout_epoch
+            // self.cfg.actor.model.num_action_chunks
+        )
+        for _ in tqdm(
+            range(self.cfg.algorithm.eval_rollout_epoch),
+            desc="Evaluating Rollout Epochs",
+            disable=(self._rank != 0),
+        ):
+            for _ in range(n_chunk_steps):
+                for _ in range(self.num_pipeline_stages):
+                    env_output = await self.recv_env_output(input_channel, mode="eval")
+                    actions, _ = self.predict(env_output["obs"], mode="eval")
+                    self.send_chunk_actions(output_channel, actions, mode="eval")
+
+        if self.enable_offload:
+            self.offload_model()
+
+    def offload_model(self):
+        self.hf_model = self.hf_model.to("cpu")
+        gc.collect()
+        torch.cuda.empty_cache()
+
+    def reload_model(self):
+        self.hf_model = self.hf_model.to(self.device)
+
+    async def recv_env_output(
+        self, input_channel: Channel, mode="train"
+    ) -> dict[str, torch.Tensor]:
+
+        if self.cfg.runner.get("enable_dist_channel", True):
+            return await self.recv_env_output_1(input_channel, mode)
+        else:
+            return await self.recv_env_output_0(input_channel, mode)
+
+    async def recv_env_output_0(
+        self, input_channel: Channel, mode="train"
+    ) -> dict[str, torch.Tensor]:
+        assert mode in ["train", "eval"], f"{mode=} is not supported"
+        # Use asyncio so that it can run alongside async weight syncing
+        handle = input_channel.get(
+            key=f"{self._rank}_{mode}", async_op=True
+        )
+
+        env_output = await handle.async_wait()
+        t = time.time()
+        with open(f"/mnt/USER/recv_env_output_0.txt", "a") as f:
+            f.write(f"{t}, {handle.latency}\n")
+        return env_output
+    
+    async def recv_env_output_1(
+        self, input_channel: Channel, mode="train"
+    ) -> dict[str, torch.Tensor]:
+        assert mode in ["train", "eval"], f"{mode=} is not supported"
+
+        src_rank_in_env = self._rank // self.gather_num
+        work = self.recv(
+            self.cfg.env.group_name, src_rank=src_rank_in_env, async_op=True
+        )
+
+        def _callback():
+            env_mode, env_batch = work.wait()
+            if env_mode == "train":
+                self.train_queue.put_nowait(env_batch)
+            elif env_mode == "eval":
+                self.eval_queue.put_nowait(env_batch)
+
+        work.then(_callback)
+
+        if mode == "train":
+            queue = self.train_queue
+        elif mode == "eval":
+            queue = self.eval_queue
+
+        while queue.empty():
+            await asyncio.sleep(0.001)
+        batch = queue.get_nowait()
+        recv_time = time.time()
+        send_time = batch.pop("send_time")
+        with open(f"/mnt/USER/recv_env_output_1.txt", "a") as f:
+            f.write(f"{recv_time}, {recv_time-send_time}\n")
+        return batch
+
+    def send_chunk_actions(self, output_channel: Channel, chunk_actions, mode="train"):
+        if self.cfg.runner.get("enable_dist_channel", True):
+            return self.send_chunk_actions_1(output_channel, chunk_actions, mode)
+        else:
+            return self.send_chunk_actions_0(output_channel, chunk_actions, mode)
+        
+    def send_chunk_actions_0(self, output_channel: Channel, chunk_actions, mode="train"):
+        assert mode in ["train", "eval"], f"{mode=} is not supported"
+        t = time.time()
+        output_channel.put(
+            item=(t, chunk_actions), key=f"{self._rank}_{mode}", async_op=True
+        )
+
+    
+    def send_chunk_actions_1(self, output_channel: Channel, chunk_actions, mode="train"):
+        assert mode in ["train", "eval"], f"{mode=} is not supported"
+        dst_rank_in_env = self._rank // self.gather_num
+        t = time.time()
+        return self.send(
+            (mode, t, chunk_actions),
+            self.cfg.env.group_name,
+            dst_rank=dst_rank_in_env,
+            async_op=True,
+        )
+
+    def get_actor_split_num(self):
+        send_num = self.placement.get_world_size("rollout") * self.num_pipeline_stages
+        recv_num = self.placement.get_world_size("actor")
+        split_num = compute_split_num(recv_num, send_num)
+        return split_num
+
+    def set_global_step(self, global_step):
+        if hasattr(self.hf_model, "set_global_step"):
+            self.hf_model.set_global_step(global_step)

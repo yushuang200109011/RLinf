@@ -1,0 +1,1 @@
+export PYTHONPATH="/root/USER-main:/root/USER-main/user/envs/realworld/xsquare/basics:$PYTHONPATH"

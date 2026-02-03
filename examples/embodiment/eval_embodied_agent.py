@@ -1,4 +1,4 @@
-# Copyright 2025 The RLinf Authors.
+# Copyright 2025 The USER Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,12 +18,12 @@ import hydra
 import torch.multiprocessing as mp
 from omegaconf.omegaconf import OmegaConf
 
-from rlinf.config import validate_cfg
-from rlinf.runners.embodied_eval_runner import EmbodiedEvalRunner
-from rlinf.scheduler import Cluster
-from rlinf.utils.placement import HybridComponentPlacement
-from rlinf.workers.env.env_worker import EnvWorker
-from rlinf.workers.rollout.hf.huggingface_worker import MultiStepRolloutWorker
+from user.config import validate_cfg
+from user.runners.embodied_eval_runner import EmbodiedEvalRunner
+from user.scheduler import Cluster
+from user.utils.placement import HybridComponentPlacement
+from user.workers.env.env_worker import EnvWorker
+from user.workers.rollout.hf.huggingface_worker import MultiStepRolloutWorker
 
 mp.set_start_method("spawn", force=True)
 

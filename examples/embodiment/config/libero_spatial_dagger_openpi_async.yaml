@@ -21,7 +21,7 @@ runner:
   task_type: embodied
   logger:
     log_path: "../results"
-    project_name: rlinf
+    project_name: user
     experiment_name: "async_dagger_sft_openpi_libero_spatial"
     logger_backends: ["tensorboard"]
 

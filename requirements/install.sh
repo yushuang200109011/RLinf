@@ -199,8 +199,8 @@ EOF
 }
 
 install_apex() {
-    # Example URL: https://github.com/RLinf/apex/releases/download/25.09/apex-0.1-cp311-cp311-linux_x86_64.whl
-    local base_url="${GITHUB_PREFIX}https://github.com/RLinf/apex/releases/download/25.09"
+    # Example URL: https://github.com/USER/apex/releases/download/25.09/apex-0.1-cp311-cp311-linux_x86_64.whl
+    local base_url="${GITHUB_PREFIX}https://github.com/USER/apex/releases/download/25.09"
 
     local py_major py_minor
     py_major=$(python - <<'EOF'
@@ -222,7 +222,7 @@ EOF
     export NUM_THREADS=$(nproc)
     export NVCC_APPEND_FLAGS=${NVCC_APPEND_FLAGS:-"--threads ${NUM_THREADS}"}
     export APEX_PARALLEL_BUILD=${APEX_PARALLEL_BUILD:-${NUM_THREADS}}
-    uv pip install "${base_url}/${wheel_name}" || (echo "Apex installation via wheel failed. Attempting to install from source..."; APEX_CPP_EXT=1 APEX_CUDA_EXT=1 uv pip install git+${GITHUB_PREFIX}https://github.com/RLinf/apex.git --no-build-isolation)
+    uv pip install "${base_url}/${wheel_name}" || (echo "Apex installation via wheel failed. Attempting to install from source..."; APEX_CPP_EXT=1 APEX_CUDA_EXT=1 uv pip install git+${GITHUB_PREFIX}https://github.com/USER/apex.git --no-build-isolation)
 }
 
 clone_or_reuse_repo() {
@@ -312,7 +312,7 @@ install_openvla_oft_model() {
             create_and_sync_venv
             install_common_embodied_deps
             install_flash_attn
-            uv pip install git+${GITHUB_PREFIX}https://github.com/RLinf/openvla-oft.git@RLinf/v0.1  --no-build-isolation
+            uv pip install git+${GITHUB_PREFIX}https://github.com/USER/openvla-oft.git@USER/v0.1  --no-build-isolation
             install_robotwin_env
             ;;
         opensora)
@@ -337,7 +337,7 @@ install_openpi_model() {
             PYTHON_VERSION="3.10"
             create_and_sync_venv
             install_common_embodied_deps
-            uv pip install git+${GITHUB_PREFIX}https://github.com/RLinf/openpi
+            uv pip install git+${GITHUB_PREFIX}https://github.com/USER/openpi
             install_behavior_env
             uv pip install protobuf==6.33.0
             ;;
@@ -345,34 +345,34 @@ install_openpi_model() {
             create_and_sync_venv
             install_common_embodied_deps
             install_maniskill_libero_env
-            uv pip install git+${GITHUB_PREFIX}https://github.com/RLinf/openpi
+            uv pip install git+${GITHUB_PREFIX}https://github.com/USER/openpi
             install_flash_attn
             ;;
         metaworld)
             create_and_sync_venv
             install_common_embodied_deps
-            uv pip install git+${GITHUB_PREFIX}https://github.com/RLinf/openpi
+            uv pip install git+${GITHUB_PREFIX}https://github.com/USER/openpi
             install_flash_attn
             install_metaworld_env
             ;;
         calvin)
             create_and_sync_venv
             install_common_embodied_deps
-            uv pip install git+${GITHUB_PREFIX}https://github.com/RLinf/openpi
+            uv pip install git+${GITHUB_PREFIX}https://github.com/USER/openpi
             install_flash_attn
             install_calvin_env
             ;;
         robocasa)
             create_and_sync_venv
             install_common_embodied_deps
-            uv pip install git+${GITHUB_PREFIX}https://github.com/RLinf/openpi
+            uv pip install git+${GITHUB_PREFIX}https://github.com/USER/openpi
             install_flash_attn
             install_robocasa_env
             ;;
         robotwin)
             create_and_sync_venv
             install_common_embodied_deps
-            uv pip install git+${GITHUB_PREFIX}https://github.com/RLinf/openpi
+            uv pip install git+${GITHUB_PREFIX}https://github.com/USER/openpi
             install_flash_attn
             install_robotwin_env
             ;;
@@ -401,7 +401,7 @@ install_gr00t_model() {
     install_common_embodied_deps
 
     local gr00t_path
-    gr00t_path=$(clone_or_reuse_repo GR00T_PATH "$VENV_DIR/gr00t" https://github.com/RLinf/Isaac-GR00T.git)
+    gr00t_path=$(clone_or_reuse_repo GR00T_PATH "$VENV_DIR/gr00t" https://github.com/USER/Isaac-GR00T.git)
     uv pip install -e "$gr00t_path" --no-deps
     uv pip install -r $SCRIPT_DIR/embodied/models/gr00t.txt
     case "$ENV_NAME" in
@@ -452,7 +452,7 @@ install_env_only() {
 install_maniskill_libero_env() {
     # Prefer an existing checkout if LIBERO_PATH is provided; otherwise clone into the venv.
     local libero_dir
-    libero_dir=$(clone_or_reuse_repo LIBERO_PATH "$VENV_DIR/libero" https://github.com/RLinf/LIBERO.git)
+    libero_dir=$(clone_or_reuse_repo LIBERO_PATH "$VENV_DIR/libero" https://github.com/USER/LIBERO.git)
 
     uv pip install -e "$libero_dir"
     echo "export PYTHONPATH=$(realpath "$libero_dir"):\$PYTHONPATH" >> "$VENV_DIR/bin/activate"
@@ -465,7 +465,7 @@ install_maniskill_libero_env() {
 install_behavior_env() {
     # Prefer an existing checkout if BEHAVIOR_PATH is provided; otherwise clone into the venv.
     local behavior_dir
-    behavior_dir=$(clone_or_reuse_repo BEHAVIOR_PATH "$VENV_DIR/BEHAVIOR-1K" https://github.com/RLinf/BEHAVIOR-1K.git -b RLinf/v3.7.1 --depth 1)
+    behavior_dir=$(clone_or_reuse_repo BEHAVIOR_PATH "$VENV_DIR/BEHAVIOR-1K" https://github.com/USER/BEHAVIOR-1K.git -b USER/v3.7.1 --depth 1)
 
     pushd "$behavior_dir" >/dev/null
     UV_LINK_MODE=hardlink ./setup.sh --omnigibson --bddl --joylo --confirm-no-conda --accept-nvidia-eula --use-uv
@@ -489,7 +489,7 @@ install_calvin_env() {
 
     uv pip install wheel cmake==3.18.4 setuptools==57.5.0 wheel==0.45.1
     # NOTE: Use a fork version of pyfasthash that fixes install on Python 3.11
-    uv pip install git+${GITHUB_PREFIX}https://github.com/RLinf/pyfasthash.git --no-build-isolation
+    uv pip install git+${GITHUB_PREFIX}https://github.com/USER/pyfasthash.git --no-build-isolation
     uv pip install -e ${calvin_dir}/calvin_env/tacto
     uv pip install -e ${calvin_dir}/calvin_env
     uv pip install -e ${calvin_dir}/calvin_models
@@ -497,7 +497,7 @@ install_calvin_env() {
 
 install_isaaclab_env() {
     local isaaclab_dir
-    isaaclab_dir=$(clone_or_reuse_repo ISAAC_LAB_PATH "$VENV_DIR/isaaclab" https://github.com/RLinf/IsaacLab)
+    isaaclab_dir=$(clone_or_reuse_repo ISAAC_LAB_PATH "$VENV_DIR/isaaclab" https://github.com/USER/IsaacLab)
 
     pushd ~ >/dev/null
     uv pip install "cuda-toolkit[nvcc]==12.8.0"
@@ -507,7 +507,7 @@ install_isaaclab_env() {
 
 install_robocasa_env() {
     local robocasa_dir
-    robocasa_dir=$(clone_or_reuse_repo ROBOCASA_PATH "$VENV_DIR/robocasa" https://github.com/RLinf/robocasa.git)
+    robocasa_dir=$(clone_or_reuse_repo ROBOCASA_PATH "$VENV_DIR/robocasa" https://github.com/USER/robocasa.git)
     
     uv pip install -e "$robocasa_dir"
     uv pip install protobuf==6.33.0
@@ -536,7 +536,7 @@ install_franka_env() {
     fi
     if [ ! -d "$ROS_CATKIN_PATH/src/franka_ros" ]; then
         # Use a fork version that fixes compile issues with newer libfranka using C++17
-        git clone -b "${FRANKA_ROS_VERSION}" --recurse-submodules https://github.com/RLinf/franka_ros
+        git clone -b "${FRANKA_ROS_VERSION}" --recurse-submodules https://github.com/USER/franka_ros
     fi
     popd >/dev/null
 
@@ -631,7 +631,7 @@ install_robotwin_env() {
 
 install_frankasim_env() {
     local serldir
-    serldir=$(clone_or_reuse_repo SERL_PATH "$VENV_DIR/serl" https://github.com/RLinf/serl.git -b RLinf/franka-sim)
+    serldir=$(clone_or_reuse_repo SERL_PATH "$VENV_DIR/serl" https://github.com/USER/serl.git -b USER/franka-sim)
     uv pip install -e "$serldir/franka_sim"
     uv pip install -r "$serldir/franka_sim/requirements.txt"
 }
@@ -648,7 +648,7 @@ install_habitat_env() {
 
     local habitat_lab_dir
     # Use a fork version of habitat-lab that fixes Python 3.11 compatibility issues
-    habitat_lab_dir=$(clone_or_reuse_repo HABITAT_LAB_PATH "$VENV_DIR/habitat-lab" https://github.com/RLinf/habitat-lab.git -b v0.3.3 --recurse-submodules)
+    habitat_lab_dir=$(clone_or_reuse_repo HABITAT_LAB_PATH "$VENV_DIR/habitat-lab" https://github.com/USER/habitat-lab.git -b v0.3.3 --recurse-submodules)
     uv pip install -e $habitat_lab_dir/habitat-lab
     uv pip install -e $habitat_lab_dir/habitat-baselines
 }
@@ -656,7 +656,7 @@ install_habitat_env() {
 install_opensora_world_model() {
     # Clone opensora repository
     local opensora_dir
-    opensora_dir=$(clone_or_reuse_repo OPENSORA_PATH "$VENV_DIR/opensora" ${GITHUB_PREFIX}https://github.com/RLinf/opensora.git)
+    opensora_dir=$(clone_or_reuse_repo OPENSORA_PATH "$VENV_DIR/opensora" ${GITHUB_PREFIX}https://github.com/USER/opensora.git)
     
     uv pip install -e "$opensora_dir"
     

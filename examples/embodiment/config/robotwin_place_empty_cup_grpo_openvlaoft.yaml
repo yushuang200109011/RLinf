@@ -21,7 +21,7 @@ runner:
   task_type: embodied
   logger:
     log_path: "../results"
-    project_name: rlinf
+    project_name: user
     experiment_name: "robotwin_grpo_openvlaoft"
     logger_backends: ["tensorboard"] # wandb, swanlab
 
@@ -94,7 +94,7 @@ env:
     max_steps_per_rollout_epoch: 200
     group_size: ${algorithm.group_size}
     assets_path: "/path/to/robotwin_assets"
-    seeds_path: ${oc.env:REPO_PATH}/rlinf/envs/robotwin/seeds/train_seeds.json
+    seeds_path: ${oc.env:REPO_PATH}/user/envs/robotwin/seeds/train_seeds.json
 
   eval:
     total_num_envs: 128
@@ -107,7 +107,7 @@ env:
     use_fixed_reset_state_ids: True
     is_eval: True
     assets_path: "/path/to/robotwin_assets"
-    seeds_path: ${oc.env:REPO_PATH}/rlinf/envs/robotwin/seeds/eval_seeds.json
+    seeds_path: ${oc.env:REPO_PATH}/user/envs/robotwin/seeds/eval_seeds.json
     video_cfg:
       save_video: True
       video_base_dir: ${runner.logger.log_path}/video/eval
@@ -132,7 +132,7 @@ actor:
 
   # Override the default values in model/openvla_oft
   model:
-    model_path: "/path/to/RLinf/RLinf-OpenVLAOFT-RoboTwin-SFT-place_empty_cup"
+    model_path: "/path/to/USER/USER-OpenVLAOFT-RoboTwin-SFT-place_empty_cup"
     implement_version: "offical"
     model_type: "openvla_oft"
     value_type: ${algorithm.reward_type}  # 'action' or 'token'

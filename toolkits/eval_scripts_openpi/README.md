@@ -1,6 +1,6 @@
 # OpenPI Evaluation Scripts
 
-This directory contains evaluation scripts for OpenPI models. Compared to the RLinf evaluation script, this script provides more granular metrics, such as success rates across different difficulty levels in MetaWorld or task completion statistics for varying sequence lengths in CALVIN. 
+This directory contains evaluation scripts for OpenPI models. Compared to the USER evaluation script, this script provides more granular metrics, such as success rates across different difficulty levels in MetaWorld or task completion statistics for varying sequence lengths in CALVIN. 
 
 However, this script is slower due to its single-threaded execution, taking approximately 2 hours on a single H100 GPU.
 

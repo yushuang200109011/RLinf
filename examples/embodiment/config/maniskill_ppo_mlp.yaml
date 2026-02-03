@@ -24,7 +24,7 @@ runner:
   task_type: embodied
   logger:
     log_path: "../results"
-    project_name: rlinf
+    project_name: user
     experiment_name: "maniskill_ppo_mlp"
     logger_backends: ["tensorboard"] # wandb, swanlab
 

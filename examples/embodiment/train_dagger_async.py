@@ -1,4 +1,4 @@
-# Copyright 2025 The RLinf Authors.
+# Copyright 2025 The USER Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,16 +18,16 @@ import hydra
 import torch.multiprocessing as mp
 from omegaconf.omegaconf import OmegaConf
 
-from rlinf.config import validate_cfg
-from rlinf.runners.async_embodied_runner import AsyncEmbodiedRunner
-from rlinf.runners.async_dagger_runner import AsyncDaggerRunner
-from rlinf.scheduler import Cluster
-from rlinf.utils.placement import HybridComponentPlacement
-from rlinf.workers.env.async_env_worker import AsyncEnvWorker
-from rlinf.workers.rollout.hf.async_huggingface_worker import (
+from user.config import validate_cfg
+from user.runners.async_embodied_runner import AsyncEmbodiedRunner
+from user.runners.async_dagger_runner import AsyncDaggerRunner
+from user.scheduler import Cluster
+from user.utils.placement import HybridComponentPlacement
+from user.workers.env.async_env_worker import AsyncEnvWorker
+from user.workers.rollout.hf.async_huggingface_worker import (
     AsyncMultiStepRolloutWorker,
 )
-from rlinf.workers.rollout.hf.async_dagger_rollout_worker import (
+from user.workers.rollout.hf.async_dagger_rollout_worker import (
     AsyncDaggerRolloutWorker,
 )
 
@@ -50,7 +50,7 @@ def main(cfg) -> None:
     # Create actor worker group
     actor_placement = component_placement.get_strategy("actor")
 
-    from rlinf.workers.actor.async_fsdp_dagger_worker import AsyncEmbodiedDAGGERFSDPPolicy
+    from user.workers.actor.async_fsdp_dagger_worker import AsyncEmbodiedDAGGERFSDPPolicy
 
     actor_worker_cls = AsyncEmbodiedDAGGERFSDPPolicy
 
@@ -71,7 +71,7 @@ def main(cfg) -> None:
 
     demo_buffer = None
     if cfg.get("data", None):
-        from rlinf.data.datasets import create_rl_dataset
+        from user.data.datasets import create_rl_dataset
 
         demo_buffer, _ = create_rl_dataset(cfg, tokenizer=None)
 

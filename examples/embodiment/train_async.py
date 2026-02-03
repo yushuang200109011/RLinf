@@ -1,4 +1,4 @@
-# Copyright 2025 The RLinf Authors.
+# Copyright 2025 The USER Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,12 +18,12 @@ import hydra
 import torch.multiprocessing as mp
 from omegaconf.omegaconf import OmegaConf
 
-from rlinf.config import validate_cfg
-from rlinf.runners.async_embodied_runner import AsyncEmbodiedRunner
-from rlinf.scheduler import Cluster
-from rlinf.utils.placement import HybridComponentPlacement
-from rlinf.workers.env.async_env_worker import AsyncEnvWorker
-from rlinf.workers.rollout.hf.async_huggingface_worker import (
+from user.config import validate_cfg
+from user.runners.async_embodied_runner import AsyncEmbodiedRunner
+from user.scheduler import Cluster
+from user.utils.placement import HybridComponentPlacement
+from user.workers.env.async_env_worker import AsyncEnvWorker
+from user.workers.rollout.hf.async_huggingface_worker import (
     AsyncMultiStepRolloutWorker,
 )
 
@@ -44,7 +44,7 @@ def main(cfg) -> None:
     actor_placement = component_placement.get_strategy("actor")
 
     if cfg.algorithm.loss_type == "embodied_sac":
-        from rlinf.workers.actor.async_fsdp_sac_policy_worker import (
+        from user.workers.actor.async_fsdp_sac_policy_worker import (
             AsyncEmbodiedSACFSDPPolicy,
         )
 

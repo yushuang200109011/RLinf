@@ -21,7 +21,7 @@ runner:
   task_type: embodied
   logger:
     log_path: "../results"
-    project_name: rlinf
+    project_name: user
     experiment_name: "libero_90_grpo_openvlaoft"
     logger_backends: ["tensorboard"] # wandb, swanlab
 
@@ -115,7 +115,7 @@ rollout:
   pipeline_stage_num: 1
 
   model:
-    model_path: "/path/to/model/RLinf-OpenVLAOFT-LIBERO-90-Base-Lora/"
+    model_path: "/path/to/model/USER-OpenVLAOFT-LIBERO-90-Base-Lora/"
     precision: ${actor.model.precision}
 
 actor:
@@ -128,7 +128,7 @@ actor:
 
   # Override the default values in model/openvla_oft
   model:
-    model_path: "/path/to/model/RLinf-OpenVLAOFT-LIBERO-90-Base-Lora/"
+    model_path: "/path/to/model/USER-OpenVLAOFT-LIBERO-90-Base-Lora/"
     model_type: "openvla_oft"
     unnorm_key: libero_90_no_noops_trajall
     max_prompt_length: 128

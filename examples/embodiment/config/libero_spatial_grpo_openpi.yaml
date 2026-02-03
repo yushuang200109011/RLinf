@@ -21,7 +21,7 @@ runner:
   task_type: embodied
   logger:
     log_path: "../results"
-    project_name: rlinf
+    project_name: user
     experiment_name: "libero_spatial_grpo_openpi"
     logger_backends: ["tensorboard"] # wandb, swanlab
 
@@ -114,7 +114,7 @@ rollout:
   pipeline_stage_num: 1
 
   model:
-    model_path: "/path/to/model/RLinf-Pi0-SFT-Spatial-Object-Goal"
+    model_path: "/path/to/model/USER-Pi0-SFT-Spatial-Object-Goal"
     precision: ${actor.model.precision}
 
 actor:
@@ -127,7 +127,7 @@ actor:
 
   # Override the default values in model/pi0
   model:
-    model_path: "/path/to/model/RLinf-Pi0-SFT-Spatial-Object-Goal"
+    model_path: "/path/to/model/USER-Pi0-SFT-Spatial-Object-Goal"
     num_action_chunks: 5 # interface for the env
 
   optim:

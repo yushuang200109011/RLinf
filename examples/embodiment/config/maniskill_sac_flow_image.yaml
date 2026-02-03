@@ -21,7 +21,7 @@ runner:
   task_type: embodied
   logger:
     log_path: "../results"
-    project_name: rlinf
+    project_name: user
     experiment_name: "sac_flow"
     logger_backends: ["tensorboard"] # wandb, swanlab
 

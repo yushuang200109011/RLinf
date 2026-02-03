@@ -1,4 +1,4 @@
-# Copyright 2025 The RLinf Authors.
+# Copyright 2025 The USER Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@ import time
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 
-from rlinf.envs.realworld.xsquare.turtle2_smooth_controller import Turtle2SmoothController
+from user.envs.realworld.xsquare.turtle2_smooth_controller import Turtle2SmoothController
 
 
 def main():

@@ -17,4 +17,4 @@ outputs/*
 .venv
 .docs-venv
 uv.lock
-rlinf/envs/maniskill/assets
+user/envs/maniskill/assets

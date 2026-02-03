@@ -21,7 +21,7 @@ runner:
   task_type: embodied
   logger:
     log_path: "../results"
-    project_name: rlinf
+    project_name: user
     experiment_name: "libero_spatial_grpo_openvlaoft"
     logger_backends: ["tensorboard"] # wandb, swanlab
 
@@ -93,7 +93,7 @@ env:
     max_steps_per_rollout_epoch: 256
     reward_coef: ${algorithm.reward_coef}
     reset_gripper_open: False
-    opensora_wm_hf_ckpt_path: "/path/to/model/RLinf-OpenSora-LIBERO-Spatial"
+    opensora_wm_hf_ckpt_path: "/path/to/model/USER-OpenSora-LIBERO-Spatial"
   eval:
     total_num_envs: 500
     auto_reset: True

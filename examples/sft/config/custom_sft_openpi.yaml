@@ -19,7 +19,7 @@ runner:
   task_type: sft
   logger:
     log_path: "../results"
-    project_name: rlinf
+    project_name: user
     experiment_name: "test_openpi"
     logger_backends: ["tensorboard"] # wandb, swanlab
 

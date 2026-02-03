@@ -21,7 +21,7 @@ runner:
   task_type: embodied
   logger:
     log_path: "../results"
-    project_name: rlinf
+    project_name: user
     experiment_name: "metaworld_45_ppo_openpi"
     logger_backends: ["tensorboard"] # wandb, swanlab
 

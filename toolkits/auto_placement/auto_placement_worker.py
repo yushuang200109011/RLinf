@@ -1,4 +1,4 @@
-# Copyright 2025 The RLinf Authors.
+# Copyright 2025 The USER Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -31,8 +31,8 @@ from placement import (
 from util import get_global_config, get_valid_gpu_num_list, init_global_config
 from workflow import Workflow, traverse_st_cuts
 
-from rlinf.scheduler import Cluster
-from rlinf.utils.placement import ModelParallelComponentPlacement
+from user.scheduler import Cluster
+from user.utils.placement import ModelParallelComponentPlacement
 
 
 class AutoPlacementWorker:

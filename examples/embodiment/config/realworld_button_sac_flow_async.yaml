@@ -38,7 +38,7 @@ runner:
   task_type: embodied
   logger:
     log_path: "../results"
-    project_name: rlinf
+    project_name: user
     experiment_name: "sac_mlp"
     logger_backends: ["tensorboard"] # wandb, swanlab
 
@@ -117,7 +117,7 @@ rollout:
   pipeline_stage_num: 1
 
   model:
-    model_path: "/home/franka/hongzhi/RLinf/"
+    model_path: "/home/franka/hongzhi/USER/"
     precision: ${actor.model.precision}
 
 actor:
@@ -135,7 +135,7 @@ actor:
     
     # Actually used as directory/
     # In policy, there is: ckpt_path = os.path.join(self.model_path, self.encoder_config["ckpt_name"])
-    model_path: "/home/franka/hongzhi/RLinf/"
+    model_path: "/home/franka/hongzhi/USER/"
 
     state_dim: 19 # 29 -> 19 for real world
     action_dim: 6 # 4 -> 6 for real world

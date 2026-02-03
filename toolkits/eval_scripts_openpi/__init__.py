@@ -1,4 +1,4 @@
-# Copyright 2025 The RLinf Authors.
+# Copyright 2025 The USER Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -25,7 +25,7 @@ from openpi.models_pytorch import pi0_pytorch
 from openpi.training import checkpoints as _checkpoints
 from openpi.training import config as _config
 
-from rlinf.models.embodiment.openpi import _CONFIGS_DICT
+from user.models.embodiment.openpi import _CONFIGS_DICT
 
 
 def setup_logger(exp_name, log_dir):

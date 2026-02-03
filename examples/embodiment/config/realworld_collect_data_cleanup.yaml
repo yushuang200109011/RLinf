@@ -29,7 +29,7 @@ runner:
   task_type: embodied
   logger:
     log_path: null
-    project_name: rlinf
+    project_name: user
     experiment_name: "collect-data"
     logger_backends: ["tensorboard"] # wandb, swanlab
   num_data_episodes: 12

@@ -1,4 +1,4 @@
-# Copyright 2025 The RLinf Authors.
+# Copyright 2025 The USER Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,11 +19,11 @@ import hydra
 import torch.multiprocessing as mp
 from omegaconf.omegaconf import OmegaConf
 
-from rlinf.config import validate_cfg
-from rlinf.runners.sft_runner import SFTRunner
-from rlinf.scheduler import Cluster
-from rlinf.utils.placement import HybridComponentPlacement
-from rlinf.workers.sft.fsdp_sft_worker import FSDPSftWorker
+from user.config import validate_cfg
+from user.runners.sft_runner import SFTRunner
+from user.scheduler import Cluster
+from user.utils.placement import HybridComponentPlacement
+from user.workers.sft.fsdp_sft_worker import FSDPSftWorker
 
 mp.set_start_method("spawn", force=True)
 

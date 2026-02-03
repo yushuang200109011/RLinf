@@ -1,11 +1,11 @@
 ## Building Docker Images
 
-RLinf provides a unified Dockerfile for both the math reasoning and embodied images, and can switch between the two images using the `BUILD_TARGET` build argument, which can be `reason` or `embodied-<env>`, where env is the name of the embodied environment (e.g., `maniskill_libero`, `behavior`, `metaworld`, `calvin`).
-To build the Docker image, run the following command **in the RLinf root directory**:
+USER provides a unified Dockerfile for both the math reasoning and embodied images, and can switch between the two images using the `BUILD_TARGET` build argument, which can be `reason` or `embodied-<env>`, where env is the name of the embodied environment (e.g., `maniskill_libero`, `behavior`, `metaworld`, `calvin`).
+To build the Docker image, run the following command **in the USER root directory**:
 
 ```shell
 export BUILD_TARGET=reason # or embodied for the embodied image
-docker build -f docker/Dockerfile --build-arg BUILD_TARGET=$BUILD_TARGET -t rlinf:$BUILD_TARGET .
+docker build -f docker/Dockerfile --build-arg BUILD_TARGET=$BUILD_TARGET -t user:$BUILD_TARGET .
 ```
 
 # Using the Docker Image

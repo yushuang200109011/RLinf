@@ -122,10 +122,10 @@ parse_args() {
 
 setup_mirror() {
     if [ "$USE_MIRRORS" -eq 1 ]; then
-        export UV_PYTHON_INSTALL_MIRROR=https://ghfast.top/https://github.com/astral-sh/python-build-standalone/releases/download
-        export UV_DEFAULT_INDEX=https://mirrors.aliyun.com/pypi/simple
-        export HF_ENDPOINT=https://hf-mirror.com
-        export GITHUB_PREFIX="https://ghfast.top/"
+        export UV_PYTHON_INSTALL_MIRROR=https://github.com/astral-sh/python-build-standalone/releases/download
+        export UV_DEFAULT_INDEX=PIP_WEBSITE
+        export HF_ENDPOINT=HF_WEBSITE
+        export GITHUB_PREFIX=""
         git config --global url."${GITHUB_PREFIX}github.com/".insteadOf "https://github.com/"
     fi
 }
@@ -662,7 +662,7 @@ install_opensora_world_model() {
     
     # Install opensora dependencies
     uv pip install -r $SCRIPT_DIR/embodied/models/opensora.txt
-    uv pip install git+${GITHUB_PREFIX}https://github.com/fangqi-Zhu/TensorNVMe.git --no-build-isolation
+    uv pip install git+${GITHUB_PREFIX}https://github.com/GITHUB-ID/TensorNVMe.git --no-build-isolation
     echo "export LD_LIBRARY_PATH=~/.tensornvme/lib:\$LD_LIBRARY_PATH" >> "$VENV_DIR/bin/activate"
     install_apex
 }

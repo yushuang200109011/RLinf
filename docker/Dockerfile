@@ -31,7 +31,7 @@ FROM base-image-$BUILD_TARGET AS base-image
 ARG NO_MIRROR
 SHELL ["/bin/bash", "-c"]
 ENV DEBIAN_FRONTEND=noninteractive
-RUN if [ -z "$NO_MIRROR" ]; then sed -i 's@//.*archive.ubuntu.com@//mirrors.ustc.edu.cn@g' /etc/apt/sources.list; fi
+RUN if [ -z "$NO_MIRROR" ]; then sed -i 's@//.*archive.ubuntu.com@//MIRROR_WEBSITE@g' /etc/apt/sources.list; fi
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git vim libibverbs-dev openssh-server sudo runit runit-systemd tmux \
     build-essential python3-dev cmake pkg-config iproute2 pciutils python3 python3-pip \
@@ -41,14 +41,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ##################################################################################################
 # Python / pip / uv setup
 ##################################################################################################
-RUN pip config set global.index-url https://mirrors.ustc.edu.cn/pypi/simple
-RUN python3 -m pip install -i https://mirrors.ustc.edu.cn/pypi/simple --upgrade pip setuptools wheel uv
+RUN pip config set global.index-url MIRROR_WEBSITE/pypi/simple
+RUN python3 -m pip install -i MIRROR_WEBSITE/pypi/simple --upgrade pip setuptools wheel uv
 
 ENV HF_HOME=/opt/.cache/huggingface
 RUN mkdir -p $HF_HOME
 
 ENV UV_DEFAULT_INDEX=${NO_MIRROR:+"https://pypi.org/simple/"}
-ENV UV_DEFAULT_INDEX=${UV_DEFAULT_INDEX:-"https://mirrors.ustc.edu.cn/pypi/simple"}
+ENV UV_DEFAULT_INDEX=${UV_DEFAULT_INDEX:-"MIRROR_WEBSITE_FOR_PIP"}
 
 ENV UV_PATH=/opt/venv
 RUN mkdir $UV_PATH

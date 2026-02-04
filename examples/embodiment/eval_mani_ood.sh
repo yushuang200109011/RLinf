@@ -1,5 +1,5 @@
 #! /bin/bash
-export HF_ENDPOINT=https://hf-mirror.com
+export HF_ENDPOINT=HF_WEBSITE
 
 export EMBODIED_PATH="$( cd "$(dirname "${BASH_SOURCE[0]}" )" && pwd )"
 export REPO_PATH=$(dirname $(dirname "$EMBODIED_PATH"))

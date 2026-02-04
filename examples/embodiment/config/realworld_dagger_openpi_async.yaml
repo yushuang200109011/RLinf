@@ -143,11 +143,11 @@ rollout:
   pipeline_stage_num: 1
 
   model:
-    model_path: "/home/ysa/openpi/checkpoints_torch/pi0_franka/redduck/18000"
+    model_path: "/path/to/model"
     precision: ${actor.model.precision}
 
   # expert_model:
-  #   model_path: "/home/ysa/dagger/ckpt/libero-final"
+  #   model_path: "/path/to/model"
   #   precision: ${actor.expert_model.precision}
 
 actor:
@@ -161,7 +161,7 @@ actor:
 
   model:
     model_name: "openpi"
-    model_path: "/home/ysa/openpi/checkpoints_torch/pi0_franka/redduck/18000"
+    model_path: "/path/to/model"
     # action_dim: 7
     
     precision: null
@@ -176,7 +176,7 @@ actor:
 
   # expert_model:
   #   model_name: "openpi"
-  #   model_path: "/home/ysa/dagger/ckpt/libero-final"
+  #   model_path: "/path/to/model"
   #   action_dim: 7
     
   #   precision: null
@@ -213,4 +213,4 @@ reward:
 critic:
   use_critic_model: False
 
-initial_sft_data_path: "/home/ysa/.cache/huggingface/lerobot"
+initial_sft_data_path: "/path/to/model"

@@ -392,7 +392,7 @@ class MultiStepRolloutWorker(Worker):
 
         env_output = await handle.async_wait()
         t = time.time()
-        with open(f"/mnt/USER/recv_env_output_0.txt", "a") as f:
+        with open(f"recv_env_output_0.txt", "a") as f:
             f.write(f"{t}, {handle.latency}\n")
         return env_output
     
@@ -425,7 +425,7 @@ class MultiStepRolloutWorker(Worker):
         batch = queue.get_nowait()
         recv_time = time.time()
         send_time = batch.pop("send_time")
-        with open(f"/mnt/USER/recv_env_output_1.txt", "a") as f:
+        with open(f"recv_env_output_1.txt", "a") as f:
             f.write(f"{recv_time}, {recv_time-send_time}\n")
         return batch
 

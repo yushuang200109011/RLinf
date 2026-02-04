@@ -115,7 +115,7 @@ class AsyncEnvWorker(EnvWorker):
             for key, value in env_metrics.items():
                 env_metrics[key] = torch.cat(value, dim=0).contiguous().cpu()
             env_metrics["rank_id"] = torch.tensor([self._rank], dtype=torch.int32)
-            env_metric_channel.put(env_metrics)
+            metric_channel.put(env_metrics)
 
             self.last_obs_list = [env_output.obs for env_output in env_output_list]
             self.last_intervened_info_list = [

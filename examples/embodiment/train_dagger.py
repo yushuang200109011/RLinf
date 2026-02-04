@@ -23,7 +23,6 @@ from user.runners.dagger_runner import DaggerRunner
 from user.scheduler import Cluster
 from user.utils.placement import HybridComponentPlacement
 from user.workers.env.env_worker import EnvWorker
-from user.workers.rollout.hf.huggingface_worker import MultiStepRolloutWorker
 from user.workers.rollout.hf.dagger_rollout_worker import DaggerRolloutWorker
 from user.workers.actor.fsdp_dagger_worker import EmbodiedDAGGERFSDPPolicy
 

@@ -159,7 +159,7 @@ def send_reward_request(
     timeout: int = 60,
 ) -> dict[str, Any]:
     url = os.getenv(
-        "LLMASJUDGE_API_URL", "https://cloud.infini-ai.com/maas/v1/chat/completions"
+        "LLMASJUDGE_API_URL", None
     )
     if session is None:
         session = create_session_with_retry()

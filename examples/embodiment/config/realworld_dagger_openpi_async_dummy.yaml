@@ -125,10 +125,6 @@ rollout:
     model_path: "/path/to/model"
     precision: ${actor.model.precision}
 
-  # expert_model:
-  #   model_path: "/path/to/model"
-  #   precision: ${actor.expert_model.precision}
-
 actor:
   group_name: "ActorGroup"
   training_backend: "fsdp"
@@ -152,18 +148,6 @@ actor:
       train_expert_only: True
   
   compile_model: False
-
-  # expert_model:
-  #   model_name: "openpi"
-  #   model_path: "/path/to/model"
-  #   action_dim: 7
-    
-  #   precision: null
-  #   add_value_head: True
-  #   openpi:
-  #     config_name: "pi0_libero"
-  #     detach_critic_input: True
-  #     train_expert_only: True
 
   optim:
     lr: 1e-5

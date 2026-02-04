@@ -194,48 +194,6 @@ RUN echo "source ${UV_PATH}/openpi/bin/activate" >> ~/.bashrc
 
 
 ##################################################################################################
-# Embodied: CALVIN
-##################################################################################################
-FROM embodied-common-image AS embodied-calvin-image
-
-# Install openpi env
-RUN bash requirements/install.sh embodied --venv openpi --model openpi --env calvin
-
-RUN source switch_env openpi && download_assets --dir /opt/assets --assets openpi
-RUN link_assets
-
-# Set default env
-RUN echo "source ${UV_PATH}/openpi/bin/activate" >> ~/.bashrc
-
-
-##################################################################################################
-# Embodied: RoboCasa
-##################################################################################################
-FROM embodied-common-image AS embodied-robocasa-image
-
-# Install openpi env
-RUN bash requirements/install.sh embodied --venv openpi --model openpi --env robocasa
-
-RUN source switch_env openpi && download_assets --dir /opt/assets --assets openpi
-RUN link_assets
-
-# Set default env
-RUN echo "source ${UV_PATH}/openpi/bin/activate" >> ~/.bashrc
-
-
-##################################################################################################
-# Embodied: IsaacLab
-##################################################################################################
-FROM embodied-common-image AS embodied-isaaclab-image
-
-# Install gr00t env
-RUN bash requirements/install.sh embodied --venv gr00t --model gr00t --env isaaclab
-
-# Set default env
-RUN echo "source ${UV_PATH}/gr00t/bin/activate" >> ~/.bashrc
-
-
-##################################################################################################
 # Embodied: Franka (Ubuntu 20.04, ROS Noetic)
 ##################################################################################################
 FROM embodied-common-image AS embodied-franka-image
@@ -248,35 +206,6 @@ RUN for v in 0.10.0 0.13.3 0.14.1 0.15.0 0.18.0; do \
 # Set default env (recommended libfranka 0.15.0)
 RUN echo "source ${UV_PATH}/franka-0.15.0/bin/activate" >> ~/.bashrc
 
-
-##################################################################################################
-# Embodied: RoboTwin
-##################################################################################################
-FROM embodied-common-image AS embodied-robotwin-image
-
-# Install openvla-oft env
-RUN bash requirements/install.sh embodied --venv openvla-oft --model openvla-oft --env robotwin
-
-# Install openpi env
-RUN bash requirements/install.sh embodied --venv openpi --model openpi --env robotwin
-
-RUN source switch_env openpi && download_assets --dir /opt/assets --assets openpi
-RUN link_assets
-
-# Set default env
-RUN echo "source ${UV_PATH}/openvla-oft/bin/activate" >> ~/.bashrc
-
-
-##################################################################################################
-# Embodied: OpenSora
-##################################################################################################
-FROM embodied-common-image AS embodied-opensora-image
-
-# Install openvla-oft env
-RUN bash requirements/install.sh embodied --venv openvla-oft --model openvla-oft --env opensora
-
-# Set default env
-RUN echo "source ${UV_PATH}/openvla-oft/bin/activate" >> ~/.bashrc
 
 ##################################################################################################
 # Final image selection

@@ -26,11 +26,9 @@ from user.utils.distributed import ScopedTimer
 from user.utils.metric_logger import MetricLogger
 from user.utils.metric_utils import (
     compute_env_metrics_per_env_worker,
-    (
-    compute_env_metrics_per_env_worker,
     compute_evaluate_metrics,
-),
-), print_metrics_table
+    print_metrics_table
+)
 from user.utils.runner_utils import check_progress
 
 if TYPE_CHECKING:

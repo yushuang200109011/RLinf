@@ -28,8 +28,6 @@ def get_model(cfg: DictConfig):
         from user.models.embodiment.openpi import get_model
     elif model_type == SupportedModel.MLP_POLICY:
         from user.models.embodiment.mlp_policy import get_model
-    elif model_type == SupportedModel.GR00T:
-        from user.models.embodiment.gr00t import get_model
     elif model_type == SupportedModel.CNN_POLICY:
         from user.models.embodiment.cnn_policy import get_model
     elif model_type == SupportedModel.FLOW_POLICY:

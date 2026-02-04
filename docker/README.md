@@ -4,7 +4,7 @@ USER provides a unified Dockerfile for both the math reasoning and embodied imag
 To build the Docker image, run the following command **in the USER root directory**:
 
 ```shell
-export BUILD_TARGET=reason # or embodied for the embodied image
+export BUILD_TARGET=embodied
 docker build -f docker/Dockerfile --build-arg BUILD_TARGET=$BUILD_TARGET -t user:$BUILD_TARGET .
 ```
 

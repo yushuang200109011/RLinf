@@ -57,56 +57,13 @@ def get_env_cls(env_type: str, env_cfg=None, enable_offload=False):
         from user.envs.libero.libero_env import LiberoEnv
 
         return LiberoEnv
-    elif env_type == SupportedEnvType.ROBOTWIN:
-        from user.envs.robotwin.robotwin_env import RoboTwinEnv
-
-        return RoboTwinEnv
-    elif env_type == SupportedEnvType.ISAACLAB:
-        from user.envs.isaaclab import REGISTER_ISAACLAB_ENVS
-
-        if env_cfg is None:
-            raise ValueError(
-                "env_cfg is required for isaaclab environment type. "
-                "Please provide env_cfg.init_params.id to select the task."
-            )
-
-        task_id = env_cfg.init_params.id
-        assert task_id in REGISTER_ISAACLAB_ENVS, (
-            f"Task type {task_id} has not been registered! "
-            f"Available tasks: {list(REGISTER_ISAACLAB_ENVS.keys())}"
-        )
-        return REGISTER_ISAACLAB_ENVS[task_id]
-    elif env_type == SupportedEnvType.METAWORLD:
-        from user.envs.metaworld.metaworld_env import MetaWorldEnv
-
-        return MetaWorldEnv
-    elif env_type == SupportedEnvType.BEHAVIOR:
-        from user.envs.behavior.behavior_env import BehaviorEnv
-
-        return BehaviorEnv
-    elif env_type == SupportedEnvType.CALVIN:
-        from user.envs.calvin.calvin_gym_env import CalvinEnv
-
-        return CalvinEnv
-    elif env_type == SupportedEnvType.ROBOCASA:
-        from user.envs.robocasa.robocasa_env import RobocasaEnv
-
-        return RobocasaEnv
     elif env_type == SupportedEnvType.REALWORLD:
         from user.envs.realworld.realworld_env import RealWorldEnv
 
         return RealWorldEnv
-    elif env_type == SupportedEnvType.HABITAT:
-        from user.envs.habitat.habitat_env import HabitatEnv
-
-        return HabitatEnv
     elif env_type == SupportedEnvType.FRANKASIM:
         from user.envs.frankasim.frankasim_env import FrankaSimEnv
 
         return FrankaSimEnv
-    elif env_type == SupportedEnvType.OPENSORAWM:
-        from user.envs.world_model.world_model_opensora_env import OpenSoraEnv
-
-        return OpenSoraEnv
     else:
         raise NotImplementedError(f"Environment type {env_type} not implemented")

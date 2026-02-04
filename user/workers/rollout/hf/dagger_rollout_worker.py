@@ -53,8 +53,6 @@ class DaggerRolloutWorker(Worker):
         rollout_model_config = copy.deepcopy(self.cfg.actor.model)
         with open_dict(rollout_model_config):
             rollout_model_config.precision = self.cfg.rollout.model.precision
-            #hzf
-            # rollout_model_config.path = self.cfg.rollout.model.model_path
             rollout_model_config.model_path = self.cfg.rollout.model.model_path
 
         self.hf_model = get_model(rollout_model_config)
@@ -471,32 +469,6 @@ class DaggerRolloutWorker(Worker):
                     with self.worker_timer():
                         actions, result = self.predict(extracted_obs)
                     
-                    """hzf
-                    if "action" not in result["forward_inputs"]:
-                        # Add environment-space action to forward_inputs
-                        # Convert actions from numpy to tensor if needed
-                        if isinstance(actions, np.ndarray):
-                            # Get device from extracted_obs
-                            if isinstance(extracted_obs, dict):
-                                sample_tensor = None
-                                if "main_images" in extracted_obs:
-                                    sample_tensor = extracted_obs["main_images"]
-                                elif "states" in extracted_obs:
-                                    sample_tensor = extracted_obs["states"]
-                                elif len(extracted_obs) > 0:
-                                    sample_tensor = list(extracted_obs.values())[0]
-                                
-                                if sample_tensor is not None and torch.is_tensor(sample_tensor):
-                                    device = sample_tensor.device
-                                else:
-                                    device = "cpu"
-                            else:
-                                device = "cpu"
-                            actions_tensor = torch.from_numpy(actions).to(device=device)
-                        else:
-                            actions_tensor = actions
-                        result["forward_inputs"]["action"] = actions_tensor
-                    """
                     if "prev_values" in result:
                         self.buffer_list[stage_id].prev_values.append(
                             result["prev_values"].cpu().contiguous()

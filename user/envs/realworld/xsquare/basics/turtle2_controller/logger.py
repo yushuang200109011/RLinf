@@ -5,7 +5,7 @@ from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
 class Logger:
-    def __init__(self, name, log_dir="/home/arm/logs/turtle2_controller", level=logging.DEBUG):
+    def __init__(self, name, log_dir="/path/to/logs/turtle2_controller", level=logging.DEBUG):
         """
 
         Args:

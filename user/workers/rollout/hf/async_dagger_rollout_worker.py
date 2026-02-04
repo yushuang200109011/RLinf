@@ -116,12 +116,6 @@ class AsyncDaggerRolloutWorker(DaggerRolloutWorker):
 
                     actions, result = self.predict(extracted_obs)
                     
-                    # For OpenPI, forward_inputs contains model_action but not action (environment-space)
-                    # We need to add action to forward_inputs so that update_intervene_actions can work
-                    # Store the current step's forward_inputs with action added for next step's intervene handling
-                    #hzf
-                    # self._add_action_to_forward_inputs(actions, extracted_obs, result)
-                    
                     # Statistics: track current step's expert usage
                     if "use_expert" in result:
                         if bool(result["use_expert"]):
@@ -203,12 +197,6 @@ class AsyncDaggerRolloutWorker(DaggerRolloutWorker):
                 env_output = await self.recv_env_output(input_channel)
                 
                 # Update last_results with intervene_actions if available
-                """hzf
-                if last_results[i] is not None:
-                    last_results[i]["forward_inputs"] = self.update_intervene_actions(
-                        env_output, last_results[i]["forward_inputs"]
-                    )
-                """
 
                 extracted_obs = self.hf_model.preprocess_env_obs(env_output["obs"])
                 dones, rewards, real_extracted_obs = self.get_dones_and_rewards(
@@ -268,10 +256,6 @@ class AsyncDaggerRolloutWorker(DaggerRolloutWorker):
                         )
                 
                     # Update last_results and last_extracted_obs for next iteration
-                    """hzf
-                    last_extracted_obs[i] = extracted_obs
-                    last_results[i] = result
-                    """
 
             progress_bar.update(1)
 

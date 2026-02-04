@@ -6,7 +6,6 @@ requires-python = ">=3.10,<=3.11.14"
 keywords = [
     "reinforcement-learning",
     "embodied-intelligence",
-    "large-language-models",
 ]
 classifiers = [
     #   2 - Pre-Alpha

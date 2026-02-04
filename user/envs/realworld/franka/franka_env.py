@@ -43,7 +43,6 @@ class FrankaRobotConfig:
     enable_camera_player: bool = True
 
     is_dummy: bool = False
-    only_pos: bool = False
     use_dense_reward: bool = False
     step_frequency: float = 10.0  # Max number of steps per second
 
@@ -76,7 +75,10 @@ class FrankaRobotConfig:
     enable_gripper_penalty: bool = True
     gripper_penalty: float = 0.1
     save_video_path: Optional[str] = None
-    joint_reset_cycle: int = 200  # Number of resets before resetting joints
+    joint_reset_cycle: int = 20000  # Number of resets before resetting joints
+    success_hold_steps: int = (
+        1  # Default to 1 to maintain backward compatibility (immediate success)
+    )
 
 
 class FrankaEnv(gym.Env):
@@ -113,6 +115,8 @@ class FrankaEnv(gym.Env):
         self._joint_reset_cycle = cycle(range(self.config.joint_reset_cycle))
         next(self._joint_reset_cycle)  # Initialize the cycle
 
+        self._success_hold_counter = 0  # Initialize the success hold counter
+
         if not self.config.is_dummy:
             self._setup_hardware()
 
@@ -143,8 +147,6 @@ class FrankaEnv(gym.Env):
         self._open_cameras()
         # Video player for displaying camera frames
         self.camera_player = VideoPlayer(self.config.enable_camera_player)
-
-        self.last_gripper_act = time.time()
 
     def _setup_hardware(self):
         from .franka_controller import FrankaController
@@ -215,8 +217,17 @@ class FrankaEnv(gym.Env):
         else:
             self._franka_state = self._franka_state
         observation = self._get_observation()
+
+        # Calculate reward and update the internal hold counter
         reward = self._calc_step_reward(observation, is_gripper_action_effective)
-        terminated = reward == 1
+
+        # Logic to determine termination
+        # The episode is done only if the robot has reached the target (reward == 1.0)
+        # AND has held the position for the required number of steps.
+        terminated = (reward == 1.0) and (
+            self._success_hold_counter >= self.config.success_hold_steps
+        )
+
         truncated = self._num_steps >= self.config.max_num_steps
         return observation, reward, terminated, truncated, {}
 
@@ -242,10 +253,19 @@ class FrankaEnv(gym.Env):
             )
             position = np.hstack([self._franka_state.tcp_pose[:3], euler_angles])
             target_delta = np.abs(position - self.config.target_ee_pose)
-            is_success = np.all(target_delta[:3] <= self.config.reward_threshold[:3])
-            if is_success:
+
+            # Check if current state meets the success threshold
+            is_in_target_zone = np.all(
+                target_delta[:3] <= self.config.reward_threshold[:3]
+            )
+
+            if is_in_target_zone:
+                # Increment hold counter if in target zone
+                self._success_hold_counter += 1
                 reward = 1.0
             else:
+                # Reset counter if robot leaves the target zone
+                self._success_hold_counter = 0
                 if self.config.use_dense_reward:
                     reward = np.exp(-500 * np.sum(np.square(target_delta[:3])))
                 else:
@@ -263,10 +283,13 @@ class FrankaEnv(gym.Env):
         else:
             return 0.0
 
-    def reset(self, joint_reset=False, seed=None, options=None):
+    def reset(self, *, seed=None, options=None):
         if self.config.is_dummy:
             observation = self._get_observation()
             return observation, {}
+
+        self._success_hold_counter = 0  # Reset hold counter at the start of the episode
+
         self._controller.reconfigure_compliance_params(
             self.config.compliance_param
         ).wait()
@@ -294,7 +317,6 @@ class FrankaEnv(gym.Env):
             self._controller.reset_joint(self.config.joint_reset_qpos).wait()
             time.sleep(0.5)
 
-        self._gripper_action(1)
         # Reset arm
         if self.config.enable_random_reset:
             reset_pose = self._reset_pose.copy()
@@ -348,13 +370,6 @@ class FrankaEnv(gym.Env):
                         "gripper_position": gym.spaces.Box(-1, 1, shape=(1,)),
                         "tcp_force": gym.spaces.Box(-np.inf, np.inf, shape=(3,)),
                         "tcp_torque": gym.spaces.Box(-np.inf, np.inf, shape=(3,)),
-                    }
-                ) if not self.config.only_pos else gym.spaces.Dict(
-                    {
-                        "tcp_pose": gym.spaces.Box(
-                            -np.inf, np.inf, shape=(obs_tcp_pose_dim,)
-                        ),
-                        "gripper_position": gym.spaces.Box(-1, 1, shape=(1,)),
                     }
                 ),
                 "frames": gym.spaces.Dict(
@@ -523,13 +538,6 @@ class FrankaEnv(gym.Env):
                 ),
                 "tcp_force": self._franka_state.tcp_force,
                 "tcp_torque": self._franka_state.tcp_torque,
-            } if not self.config.only_pos else {
-                "tcp_pose": self._franka_state.tcp_pose,
-                "gripper_position": np.array(
-                    [
-                        self._franka_state.gripper_position,
-                    ]
-                ),
             }
             observation = {
                 "state": state,
@@ -538,16 +546,13 @@ class FrankaEnv(gym.Env):
             return copy.deepcopy(observation)
         else:
             obs = self._base_observation_space.sample()
-            obs["state"]["tcp_pose"] = np.array([0, 1, 2, 0, 0, 0, 1], dtype=np.float32)
-            obs["state"]["gripper_position"] = np.array([0.5], dtype=np.float32)
             return obs
 
     def transform_obs_base_to_ee(self, state):
         self.adjoint_matrix = construct_adjoint_matrix(self._franka_state.tcp_pose)
         adjoint_inv = np.linalg.inv(self.adjoint_matrix)
 
-        if "tcp_vel" in state.keys():
-            state["tcp_vel"] = adjoint_inv @ state["tcp_vel"]
+        state["tcp_vel"] = adjoint_inv @ state["tcp_vel"]
 
         T_b_o = construct_homogeneous_matrix(self._franka_state.tcp_pose)
         T_r_o = self.T_b_r_inv @ T_b_o

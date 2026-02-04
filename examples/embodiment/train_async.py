@@ -66,11 +66,24 @@ def main(cfg) -> None:
         cluster, name=cfg.env.group_name, placement_strategy=env_placement
     )
 
+    # Create reward worker group if using reward model
+    reward_group = None
+    if cfg.get("reward", {}).get("use_reward_model", False):
+        from user.workers.reward.reward_worker import ImageRewardWorker
+
+        reward_placement = component_placement.get_strategy("reward")
+        reward_group = ImageRewardWorker.create_group(cfg).launch(
+            cluster,
+            name=cfg.reward.get("group_name", "RewardGroup"),
+            placement_strategy=reward_placement,
+        )
+
     runner = AsyncEmbodiedRunner(
         cfg=cfg,
         actor=actor_group,
         rollout=rollout_group,
         env=env_group,
+        reward=reward_group,
     )
 
     runner.init_workers()

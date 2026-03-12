@@ -61,8 +61,21 @@ class RealworldInputs(transforms.DataTransformFn):
         base_image = _parse_image(data["observation/image"])
         wrist_image = _parse_image(data["observation/extra_view_images"])
 
+        # Realworld env concatenates state dict alphabetically (19-dim):
+        # gripper_position (1), tcp_force (3), tcp_pose (6), tcp_torque (3), tcp_vel (6).
+        # pi0_realworld_pnp expects 7-dim: tcp_pose (6) + gripper (1); norm_stats are 7-dim.
+
+        _TCP_POSE_START, _TCP_POSE_END = 4, 10  # indices 4..9
+        _GRIPPER_IDX = 0
+        _STATE_7_INDICES = (
+            list(range(_TCP_POSE_START, _TCP_POSE_END)) + [_GRIPPER_IDX]
+        )  # tcp_pose then gripper
+        states = np.asarray(data["observation/state"])
+        if states.shape[-1] == 19:
+            states = states[..., _STATE_7_INDICES]
+
         inputs = {
-            "state": data["observation/state"],
+            "state": states,
             "image": {
                 "base_0_rgb": base_image,
                 "left_wrist_0_rgb": wrist_image,

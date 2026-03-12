@@ -125,7 +125,7 @@ class FrankaBinRelocationEnv(FrankaEnv):
 
     @property
     def task_description(self):
-        return "bin relocation"
+        return "Pick up the red pepper doll from the table and place it on the purple plate"
 
     def intersect_line_bbox(self, p1, p2, bbox_min, bbox_max):
         # Define the parameterized line segment

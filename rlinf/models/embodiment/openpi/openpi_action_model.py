@@ -382,11 +382,29 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
             processed_obs["observation/state_ee_pos"] = state[:, :3]
             processed_obs["observation/state_ee_rot"] = state[:, 3:6]
             processed_obs["observation/state_gripper"] = state[:, 6:7]
+        elif "realworld" in self.config.config_name:
+            # Realworld env concatenates state dict alphabetically:
+            # gripper_position (1), tcp_force (3), tcp_pose (6), tcp_torque (3), tcp_vel (6) = 19.
+            # pi0_realworld_pnp expects 7-dim: tcp_pose (6) + gripper (1); norm_stats are 7-dim.
+            states = env_obs["states"]
+            if states.shape[-1] != 7:
+                # indices: tcp_pose 4:10, gripper 0:1
+                states = states[..., [4, 5, 6, 7, 8, 9, 0]]
+            processed_obs["observation/state"] = states
         else:
             processed_obs["observation/state"] = env_obs["states"]
         # wrist image observation
         if env_obs["wrist_images"] is not None:
             processed_obs["observation/wrist_image"] = env_obs["wrist_images"]
+
+        if env_obs["extra_view_images"] is not None:
+            extra = env_obs.get("extra_view_images")
+            # extra_view_images: [N_ENV, N_IMG, H, W, C] -> take first view [N, H, W, C]
+            if extra.dim() == 5:
+                processed_obs["observation/extra_view_images"] = extra[:, 0]
+            else:
+                processed_obs["observation/extra_view_images"] = extra
+
         # store used keys
         return processed_obs
 

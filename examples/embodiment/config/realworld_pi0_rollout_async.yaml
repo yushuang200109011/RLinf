@@ -136,6 +136,8 @@ env:
       is_dummy: false
       max_num_steps: 160
       enable_gripper_penalty: False
+    
+    task_description: null  # Example: "Pick up the red pepper doll from the table and place it on the purple plate"
 
   eval:
     total_num_envs: 1

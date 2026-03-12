@@ -86,7 +86,7 @@ class BinEnvConfig(FrankaRobotConfig):
         self.action_scale = np.array([0.03, 0.1, 1])
         self.ee_pose_limit_min = np.array(
             [
-                self.target_ee_pose[0] - 0.01,
+                self.target_ee_pose[0] - self.random_x_range,
                 self.target_ee_pose[1] - self.random_y_range,
                 self.target_ee_pose[2] - self.random_z_range_low,
                 self.target_ee_pose[3] - 0.01,
@@ -96,7 +96,7 @@ class BinEnvConfig(FrankaRobotConfig):
         )
         self.ee_pose_limit_max = np.array(
             [
-                self.target_ee_pose[0] + 0.2,
+                self.target_ee_pose[0] + self.random_x_range,
                 self.target_ee_pose[1] + self.random_y_range,
                 self.target_ee_pose[2] + self.random_z_range_high,
                 self.target_ee_pose[3] + 0.01,
@@ -125,7 +125,7 @@ class FrankaBinRelocationEnv(FrankaEnv):
 
     @property
     def task_description(self):
-        return "Pick up the red pepper doll from the table and place it on the purple plate"
+        return "bin relocation"
 
     def intersect_line_bbox(self, p1, p2, bbox_min, bbox_max):
         # Define the parameterized line segment

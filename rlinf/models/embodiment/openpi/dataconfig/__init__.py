@@ -50,6 +50,9 @@ from rlinf.models.embodiment.openpi.dataconfig.maniskill_dataconfig import (
 from rlinf.models.embodiment.openpi.dataconfig.metaworld_dataconfig import (
     LeRobotMetaworldDataConfig,
 )
+from rlinf.models.embodiment.openpi.dataconfig.realworld_pnp_dataconfig import (
+    LeRobotRealworldPnPDataConfig,
+)
 from rlinf.models.embodiment.openpi.dataconfig.robocasa_dataconfig import (
     LeRobotRobocasaDataConfig,
 )
@@ -304,6 +307,20 @@ _CONFIGS = [
             assets=AssetsConfig(assets_dir="checkpoints/torch/pi0_base/assets"),
             extra_delta_transform=False,  # True for delta action, False for abs_action
             action_train_with_rotation_6d=False,  # User can add extra config in custom dataset
+        ),
+        pytorch_weight_path="checkpoints/torch/pi0_base",
+    ),
+    TrainConfig(
+        name="pi0_realworld_pnp",
+        model=pi0_config.Pi0Config(action_horizon=10),
+        data=LeRobotRealworldPnPDataConfig(
+            repo_id="realworld_pnp",
+            base_config=DataConfig(prompt_from_task=True),
+            assets=AssetsConfig(assets_dir="checkpoints/torch/pi0_base/assets"),
+            extra_delta_transform=False,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "checkpoints/jax/pi0_base/params"
         ),
         pytorch_weight_path="checkpoints/torch/pi0_base",
     ),

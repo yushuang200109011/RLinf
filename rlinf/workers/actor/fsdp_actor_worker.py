@@ -1061,6 +1061,11 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
     def sync_model_to_rollout(self) -> None:
         """
         Sync the model's full state dict to the rollout worker.
+
+        Uses cpu_offload=True so tensors are sent/received on CPU. This avoids
+        OOM when actor and rollout share the same GPU: receiving on CPU then
+        load_state_dict into the rollout model does not allocate a second
+        full copy on GPU.
         """
         if self.enable_offload and not self.is_optimizer_offloaded:
             self.offload_optimizer()
@@ -1068,7 +1073,7 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
         if self.enable_offload and self.is_weight_offloaded:
             self.load_param_and_grad(self.device)
 
-        state_dict = self.get_model_state_dict(cpu_offload=False, full_state_dict=True)
+        state_dict = self.get_model_state_dict(cpu_offload=True, full_state_dict=True)
         for rank in self._weight_dst_rank_in_rollout:
             self.send(
                 state_dict,

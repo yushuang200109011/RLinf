@@ -127,7 +127,12 @@ class RealWorldEnv(gym.Env):
             for env_idx in range(self.num_envs)
         ]
         self.env = NoAutoResetSyncVectorEnv(env_fns)
-        self.task_descriptions = list(self.env.call("task_description"))
+
+        cfg_task_desc = self.cfg.get("task_description")
+        if cfg_task_desc and str(cfg_task_desc).strip():
+            self.task_descriptions = [str(cfg_task_desc).strip()] * self.num_envs
+        else:
+            self.task_descriptions = list(self.env.call("task_description"))
 
     @property
     def total_num_group_envs(self):

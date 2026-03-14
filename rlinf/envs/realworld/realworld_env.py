@@ -130,6 +130,14 @@ class RealWorldEnv(gym.Env):
         self.task_descriptions = list(self.env.call("task_description"))
 
     @property
+    def action_space(self):
+        return self.env.action_space
+
+    @property
+    def observation_space(self):
+        return self.env.observation_space
+
+    @property
     def total_num_group_envs(self):
         return np.iinfo(np.uint8).max // 2  # TODO
 

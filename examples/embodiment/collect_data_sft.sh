@@ -2,7 +2,7 @@
 
 export EMBODIED_PATH="$( cd "$(dirname "${BASH_SOURCE[0]}" )" && pwd )"
 export REPO_PATH=$(dirname $(dirname "$EMBODIED_PATH"))
-export SRC_FILE="${EMBODIED_PATH}/collect_real_data_with_wrapper.py"
+export SRC_FILE="${EMBODIED_PATH}/collect_real_data_sft.py"
 
 export PYTHONPATH=${REPO_PATH}:$PYTHONPATH
 
@@ -10,7 +10,7 @@ export HYDRA_FULL_ERROR=1
 
 
 if [ -z "$1" ]; then
-    CONFIG_NAME="realworld_collect_data_wrapper"
+    CONFIG_NAME="realworld_collect_data_sft"
 else
     CONFIG_NAME=$1
 fi

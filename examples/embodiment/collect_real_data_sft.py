@@ -200,7 +200,7 @@ class DataCollector(Worker):
 
 
 @hydra.main(
-    version_base="1.1", config_path="config", config_name="realworld_collect_data_wrapper"
+    version_base="1.1", config_path="config", config_name="realworld_collect_data_sft"
 )
 def main(cfg):
     cluster = Cluster(cluster_cfg=cfg.cluster)

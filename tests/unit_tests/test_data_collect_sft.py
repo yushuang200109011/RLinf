@@ -236,7 +236,7 @@ class TestRealWorldCollectEpisode:
     """Test interactive recording logic without real hardware."""
 
     def _make_wrapper(self, fake_listener: _FakeKeyboardListener, tmp_path):
-        from examples.embodiment.collect_real_data_with_wrapper import (
+        from examples.embodiment.collect_real_data_sft import (
             RealWorldCollectEpisode,
         )
 
@@ -254,7 +254,7 @@ class TestRealWorldCollectEpisode:
         return wrapper
 
     def test_inject_success_with_episode_dict(self):
-        from examples.embodiment.collect_real_data_with_wrapper import (
+        from examples.embodiment.collect_real_data_sft import (
             RealWorldCollectEpisode,
         )
 
@@ -264,7 +264,7 @@ class TestRealWorldCollectEpisode:
         assert info["episode"]["success_once"].item() is True
 
     def test_inject_success_without_episode(self):
-        from examples.embodiment.collect_real_data_with_wrapper import (
+        from examples.embodiment.collect_real_data_sft import (
             RealWorldCollectEpisode,
         )
 
@@ -274,7 +274,7 @@ class TestRealWorldCollectEpisode:
         assert info["success"].item() is False
 
     def test_inject_success_non_dict_episode(self):
-        from examples.embodiment.collect_real_data_with_wrapper import (
+        from examples.embodiment.collect_real_data_sft import (
             RealWorldCollectEpisode,
         )
 

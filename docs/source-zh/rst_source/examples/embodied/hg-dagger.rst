@@ -1,7 +1,7 @@
 真实 Franka 的 HG-DAgger 全流程
 ===============================
 
-**HG-DAgger**（Human-Gated DAgger）是一种面向真实世界交互式模仿学习的算法
+**HG-DAgger** （Human-Gated DAgger）是一种面向真实世界交互式模仿学习的算法
 流程。该流程先采集带遥操作的真实数据，再基于收集到的 LeRobot 数据集执行
 OpenPI SFT，最后在机器人上继续运行异步在线 HG-DAgger。
 

@@ -295,6 +295,20 @@
       </div>
     </div>
 
+    <div style="display: flex; justify-content: center; gap: 20px; align-items: flex-start; flex-wrap: wrap;">
+      <div style="flex: 1 1 30%; max-width: 300px; text-align: center;">
+       <img src="https://github.com/RLinf/misc/raw/main/pic/hg-dagger.jpg"
+            style="width: 100%; height: 200px; object-fit: cover; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.15);" />
+       <p style="margin-top: 8px; font-size: 14px; line-height: 1.4;">
+        <a href="hg-dagger.html" style="text-decoration: underline; color: blue;">
+          <b>Franka 机械臂上的 HG-DAgger</b>
+        </a><br>
+        Human-Gated 真机 DAgger 流程：数据采集、SFT 与在线干预训练
+       </p>
+     </div>
+     
+    </div>
+
 
 .. toctree::
    :hidden:
@@ -326,5 +340,5 @@
    co_training
    dsrl
    dagger
+   hg-dagger
    lingbotvla
-

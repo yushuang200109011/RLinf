@@ -257,7 +257,7 @@ Pi0 DAgger 配置使用单独的学生模型与专家模型路径：
 .. code-block:: bash
 
    export HF_LEROBOT_HOME=/path/to/lerobot_root
-   python toolkits/replay_buffer/calculate_norm_status.py \
+   python toolkits/replay_buffer/calculate_norm_stats.py \
        --config-name pi0_franka_dagger \
        --repo-id franka_dagger
 

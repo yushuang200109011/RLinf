@@ -450,11 +450,19 @@ First, list the available keyboard devices:
 
    ls -l /dev/input/by-id/*-event-kbd
 
-Then choose the keyboard you want to use and export it in your setup script or shell before ``ray start``:
+This command shows the stable keyboard name and the corresponding ``eventX`` device. For example, ``usb-Logitech_USB_Keyboard-event-kbd -> ../event20`` means the keyboard device is ``/dev/input/event20``.
+
+Before starting training, grant access to that event device:
 
 .. code-block:: bash
 
-   export RLINF_KEYBOARD_DEVICE=/dev/input/by-id/<your-keyboard-event-kbd>
+   chmod 666 /dev/input/event20
+
+Then export the event device in your setup script or shell before ``ray start``:
+
+.. code-block:: bash
+
+   export RLINF_KEYBOARD_DEVICE=/dev/input/event20
 
 If you are using ``ray_utils/realworld/setup_before_ray.sh``, add the export there on the controller node so that all ray-launched env processes inherit it.
 

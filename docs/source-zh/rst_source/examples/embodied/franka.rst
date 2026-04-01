@@ -456,11 +456,19 @@ RLinf 使用 ray 来管理分布式环境，这意味着：
 
    ls -l /dev/input/by-id/*-event-kbd
 
-然后选择你要使用的键盘，并在启动 ``ray`` 之前于 shell 或 setup 脚本中导出环境变量：
+该命令会显示稳定的键盘名称以及其对应的 ``eventX`` 设备。例如，``usb-Logitech_USB_Keyboard-event-kbd -> ../event20`` 表示对应的键盘设备是 ``/dev/input/event20``。
+
+开始训练前，先给该 event 设备开放访问权限：
 
 .. code-block:: bash
 
-   export RLINF_KEYBOARD_DEVICE=/dev/input/by-id/<your-keyboard-event-kbd>
+   chmod 666 /dev/input/event20
+
+然后在启动 ``ray`` 之前，于 shell 或 setup 脚本中导出这个 event 设备：
+
+.. code-block:: bash
+
+   export RLINF_KEYBOARD_DEVICE=/dev/input/event20
 
 如果你使用的是 ``ray_utils/realworld/setup_before_ray.sh``，建议在控制节点的该脚本中加入这条 ``export``，确保 ray 启动的 env 进程能够继承这个环境变量。
 

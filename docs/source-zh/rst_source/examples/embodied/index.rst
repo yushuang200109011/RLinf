@@ -339,6 +339,7 @@
    sft_vlm
    co_training
    dsrl
+   nft_openpi
    dagger
    hg-dagger
    lingbotvla

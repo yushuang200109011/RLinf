@@ -55,7 +55,7 @@ class EmbodiedEvalRunner:
     def init_workers(self):
         rollout_handle = self.rollout.init_worker()
         env_handle = self.env.init_worker()
-        
+
         rollout_handle.wait()
         env_handle.wait()
 

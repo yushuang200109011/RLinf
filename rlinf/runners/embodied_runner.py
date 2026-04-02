@@ -137,7 +137,7 @@ class EmbodiedRunner:
         env_handle = self.env.init_worker()
         if self.reward is not None:
             self.reward.init_worker().wait()
-        
+
         rollout_handle.wait()
         env_handle.wait()
         self.actor.init_worker().wait()

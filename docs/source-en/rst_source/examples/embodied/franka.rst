@@ -427,7 +427,7 @@ Change the ``data.path`` field to the path where you have uploaded the collected
 Headless Keyboard Reward Wrapper (Optional)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-If you want to label rewards from a physical keyboard by humand, enable the keyboard wrapper in the real-world env config.
+If you want to label rewards from a physical keyboard by human, enable the keyboard wrapper in the real-world env config.
 
 For example, in ``examples/embodiment/config/realworld_peginsertion_rlpd_cnn_async.yaml``:
 

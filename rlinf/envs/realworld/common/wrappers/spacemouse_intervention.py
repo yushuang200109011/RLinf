@@ -30,26 +30,16 @@ class SpacemouseIntervention(gym.ActionWrapper):
         self.left, self.right = False, False
         self.gripper_action = None
         if self.gripper_enabled:
-            self._init_gripper_action()
+            # init self.gripper_action
+            state = self.get_wrapper_attr("_franka_state")
+            is_open = bool(getattr(state, "gripper_open", True))
+            self.gripper_action = self._sample_gripper_action(is_open=is_open)
 
     @staticmethod
     def _sample_gripper_action(is_open: bool) -> np.ndarray:
         if is_open:
             return np.random.uniform(0.9, 1.0, size=(1,))
         return np.random.uniform(-1.0, -0.9, size=(1,))
-
-    def _init_gripper_action(self) -> None:
-        if self.gripper_action is not None:
-            return
-
-        is_open = True
-        try:
-            franka_state = self.get_wrapper_attr("_franka_state")
-            is_open = bool(getattr(franka_state, "gripper_open", True))
-        except AttributeError:
-            pass
-
-        self.gripper_action = self._sample_gripper_action(is_open=is_open)
 
     def action(self, action: np.ndarray) -> np.ndarray:
         """

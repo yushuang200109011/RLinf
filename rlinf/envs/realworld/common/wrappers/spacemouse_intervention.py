@@ -20,6 +20,12 @@ import numpy as np
 from rlinf.envs.realworld.common.spacemouse.spacemouse_expert import SpaceMouseExpert
 
 
+def _sample_gripper_action(is_open: bool) -> np.ndarray:
+    if is_open:
+        return np.random.uniform(0.9, 1.0, size=(1,))
+    return np.random.uniform(-1.0, -0.9, size=(1,))
+
+
 class SpacemouseIntervention(gym.ActionWrapper):
     def __init__(self, env, gripper_enabled: bool = True):
         super().__init__(env)
@@ -33,13 +39,7 @@ class SpacemouseIntervention(gym.ActionWrapper):
             # init self.gripper_action
             state = self.get_wrapper_attr("_franka_state")
             is_open = bool(getattr(state, "gripper_open", True))
-            self.gripper_action = self._sample_gripper_action(is_open=is_open)
-
-    @staticmethod
-    def _sample_gripper_action(is_open: bool) -> np.ndarray:
-        if is_open:
-            return np.random.uniform(0.9, 1.0, size=(1,))
-        return np.random.uniform(-1.0, -0.9, size=(1,))
+            self.gripper_action = _sample_gripper_action(is_open=is_open)
 
     def action(self, action: np.ndarray) -> np.ndarray:
         """
@@ -55,10 +55,10 @@ class SpacemouseIntervention(gym.ActionWrapper):
             self.last_intervene = time.time()
         if self.gripper_enabled:
             if self.left:  # close gripper
-                self.gripper_action = self._sample_gripper_action(is_open=False)
+                self.gripper_action = _sample_gripper_action(is_open=False)
                 self.last_intervene = time.time()
             elif self.right:  # open gripper
-                self.gripper_action = self._sample_gripper_action(is_open=True)
+                self.gripper_action = _sample_gripper_action(is_open=True)
                 self.last_intervene = time.time()
             gripper_action = self.gripper_action.copy()
             expert_a = np.concatenate((expert_a, gripper_action), axis=0)

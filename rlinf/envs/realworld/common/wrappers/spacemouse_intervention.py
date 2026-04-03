@@ -29,6 +29,8 @@ class SpacemouseIntervention(gym.ActionWrapper):
         self.last_intervene = 0
         self.left, self.right = False, False
         self.gripper_action = None
+        if self.gripper_enabled:
+            self._init_gripper_action()
 
     @staticmethod
     def _sample_gripper_action(is_open: bool) -> np.ndarray:
@@ -62,7 +64,6 @@ class SpacemouseIntervention(gym.ActionWrapper):
         if np.linalg.norm(expert_a) > 0.001 or (self.left + self.right) > 0.5:
             self.last_intervene = time.time()
         if self.gripper_enabled:
-            self._init_gripper_action()
             if self.left:  # close gripper
                 self.gripper_action = self._sample_gripper_action(is_open=False)
                 self.last_intervene = time.time()

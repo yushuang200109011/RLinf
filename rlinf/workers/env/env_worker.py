@@ -360,6 +360,15 @@ class EnvWorker(Worker):
             infos["intervene_action"] if "intervene_action" in infos else None
         )
         intervene_flags = infos["intervene_flag"] if "intervene_flag" in infos else None
+        if intervene_flags is not None:
+            if intervene_flags.dim() == 1:
+                next_intervene_flag = intervene_flags.to(torch.bool)
+            else:
+                next_intervene_flag = intervene_flags[:, -1].to(torch.bool)
+        else:
+            next_intervene_flag = torch.zeros(
+                self.train_num_envs_per_stage, dtype=torch.bool
+            )
         if self.cfg.env.train.auto_reset and chunk_dones.any():
             if "intervene_action" in infos["final_info"]:
                 intervene_actions = infos["final_info"]["intervene_action"]
@@ -374,6 +383,7 @@ class EnvWorker(Worker):
             truncations=chunk_truncations,
             intervene_actions=intervene_actions,
             intervene_flags=intervene_flags,
+            next_intervene_flag=next_intervene_flag,
         )
         return env_output, env_info
 
@@ -774,6 +784,9 @@ class EnvWorker(Worker):
                     else None,
                     intervene_actions=None,
                     intervene_flags=None,
+                    next_intervene_flag=torch.zeros(
+                        self.train_num_envs_per_stage, dtype=torch.bool
+                    ),
                 )
                 env_outputs.append(env_output)
         else:
@@ -790,6 +803,9 @@ class EnvWorker(Worker):
                     truncations=truncations,
                     intervene_actions=self.last_intervened_info_list[stage_id][0],
                     intervene_flags=self.last_intervened_info_list[stage_id][1],
+                    next_intervene_flag=torch.zeros(
+                        self.train_num_envs_per_stage, dtype=torch.bool
+                    ),
                 )
                 env_outputs.append(env_output)
 
@@ -854,6 +870,7 @@ class EnvWorker(Worker):
                     {
                         "obs": env_batch["obs"],
                         "final_obs": env_batch["final_obs"],
+                        "next_intervene_flag": env_batch["next_intervene_flag"],
                     },
                 )
 
@@ -918,6 +935,7 @@ class EnvWorker(Worker):
                         {
                             "obs": env_batch["obs"],
                             "final_obs": env_batch["final_obs"],
+                            "next_intervene_flag": env_batch["next_intervene_flag"],
                         },
                     )
                     if self.collect_transitions:

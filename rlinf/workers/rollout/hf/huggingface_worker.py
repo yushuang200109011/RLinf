@@ -81,8 +81,15 @@ class MultiStepRolloutWorker(Worker):
             // cfg.actor.model.num_action_chunks
         )
         self.collect_prev_infos = self.cfg.rollout.get("collect_prev_infos", True)
+        self.skip_model_rollout_on_intervention = self.cfg.rollout.get(
+            "skip_model_rollout_on_intervention", False
+        )
         self.version = 0
         self.finished_episodes = None
+        self._forward_input_specs: dict[str, tuple[torch.Size, torch.dtype]] = {}
+        self._prev_logprobs_spec: tuple[torch.Size, torch.dtype] | None = None
+        self._prev_values_spec: tuple[torch.Size, torch.dtype] | None = None
+        self._versions_spec: tuple[torch.Size, torch.dtype] | None = None
 
     def init_worker(self):
         rollout_model_config = copy.deepcopy(self.cfg.actor.model)
@@ -317,6 +324,119 @@ class MultiStepRolloutWorker(Worker):
         result["expert_label_flag"] = bool(expert_label_flag)
         return actions, result
 
+    def _update_rollout_specs(self, result: dict[str, Any]) -> None:
+        forward_inputs = result.get("forward_inputs", {})
+        self._forward_input_specs = {
+            key: (value.shape[1:], value.dtype)
+            for key, value in forward_inputs.items()
+            if isinstance(value, torch.Tensor)
+        }
+        prev_logprobs = result.get("prev_logprobs")
+        if isinstance(prev_logprobs, torch.Tensor):
+            self._prev_logprobs_spec = (prev_logprobs.shape[1:], prev_logprobs.dtype)
+            self._versions_spec = self._prev_logprobs_spec
+        prev_values = result.get("prev_values")
+        if isinstance(prev_values, torch.Tensor):
+            self._prev_values_spec = (prev_values.shape[1:], prev_values.dtype)
+
+    def _make_zero_tensor_from_spec(
+        self,
+        spec: tuple[torch.Size, torch.dtype] | None,
+        batch_size: int,
+        *,
+        dtype: torch.dtype = torch.float32,
+    ) -> torch.Tensor:
+        if spec is None:
+            return torch.zeros((batch_size, 1), dtype=dtype)
+        shape_suffix, tensor_dtype = spec
+        return torch.zeros((batch_size, *shape_suffix), dtype=tensor_dtype)
+
+    def _should_skip_rollout(
+        self, env_output: dict[str, Any], mode: Literal["train", "eval"] = "train"
+    ) -> bool:
+        if (
+            mode != "train"
+            or not self.skip_model_rollout_on_intervention
+            or "next_intervene_flag" not in env_output
+        ):
+            return False
+        next_intervene_flag = env_output["next_intervene_flag"]
+        return isinstance(next_intervene_flag, torch.Tensor) and bool(
+            next_intervene_flag.all().item()
+        )
+
+    def _make_synthetic_forward_inputs(
+        self, env_obs: dict[str, Any], batch_size: int, actions: torch.Tensor
+    ) -> dict[str, torch.Tensor]:
+        forward_inputs = {}
+        for key, spec in self._forward_input_specs.items():
+            if key == "action":
+                forward_inputs[key] = actions.clone()
+            elif key == "model_action":
+                forward_inputs[key] = actions.clone()
+            elif key in env_obs and isinstance(env_obs[key], torch.Tensor):
+                forward_inputs[key] = env_obs[key].cpu().contiguous()
+            else:
+                forward_inputs[key] = self._make_zero_tensor_from_spec(spec, batch_size)
+        return forward_inputs
+
+    def _make_synthetic_rollout_result(
+        self,
+        env_output: dict[str, Any],
+        *,
+        include_actions: bool,
+    ) -> RolloutResult | None:
+        if include_actions and not self._forward_input_specs:
+            self.log_warning(
+                "Skip rollout requested before a normal rollout template was cached; falling back to model rollout."
+            )
+            return None
+
+        batch_size = env_output["next_intervene_flag"].shape[0]
+        actions = None
+        forward_inputs = {}
+        prev_logprobs = None
+        if include_actions:
+            actions = torch.zeros(
+                (
+                    batch_size,
+                    self.cfg.actor.model.num_action_chunks
+                    * self.cfg.actor.model.action_dim,
+                ),
+                dtype=torch.float32,
+            )
+            prev_logprobs = self._make_zero_tensor_from_spec(
+                self._prev_logprobs_spec,
+                batch_size,
+            )
+            forward_inputs = self._make_synthetic_forward_inputs(
+                env_output["obs"], batch_size, actions
+            )
+
+        prev_values = None
+        if self.collect_prev_infos and self._prev_values_spec is not None:
+            prev_values = self._make_zero_tensor_from_spec(
+                self._prev_values_spec, batch_size
+            )
+        bootstrap_values = None
+        if hasattr(self.hf_model, "value_head") or hasattr(self.hf_model, "q_head"):
+            bootstrap_values = torch.zeros((batch_size, 1), dtype=torch.float32)
+
+        versions = self._make_zero_tensor_from_spec(
+            self._versions_spec,
+            batch_size,
+        )
+        versions.fill_(float(self.version))
+
+        return RolloutResult(
+            actions=actions,
+            prev_logprobs=prev_logprobs if self.collect_prev_infos else None,
+            prev_values=prev_values,
+            bootstrap_values=bootstrap_values,
+            forward_inputs=forward_inputs,
+            versions=versions,
+        )
+
     def get_bootstrap_values(
         self, final_obs: dict[str, Any] | None
     ) -> torch.Tensor | None:
@@ -354,47 +474,73 @@ class MultiStepRolloutWorker(Worker):
         for _ in range(self.n_train_chunk_steps):
             for _ in range(self.num_pipeline_stages):
                 env_output = await self.recv_env_output(input_channel)
-                actions, result = self.predict(env_output["obs"])
-
-                save_flags = None
-                if result.get("expert_label_flag", False):
-                    save_flags = torch.full(
-                        (actions.shape[0], self.cfg.actor.model.num_action_chunks),
-                        True,
-                        dtype=torch.bool,
-                        device=actions.device,
+                rollout_result = None
+                if self._should_skip_rollout(env_output):
+                    rollout_result = self._make_synthetic_rollout_result(
+                        env_output,
+                        include_actions=True,
                     )
+                    if rollout_result is not None:
+                        self.log_info(
+                            "Skipping model rollout for one chunk because next_intervene_flag is true for the full batch."
+                        )
+                if rollout_result is None:
+                    actions, result = self.predict(env_output["obs"])
+                    self._update_rollout_specs(result)
+
+                    save_flags = None
+                    if result.get("expert_label_flag", False):
+                        save_flags = torch.full(
+                            (actions.shape[0], self.cfg.actor.model.num_action_chunks),
+                            True,
+                            dtype=torch.bool,
+                            device=actions.device,
+                        )
+                    rollout_result = RolloutResult(
+                        actions=actions,
+                        prev_logprobs=result["prev_logprobs"]
+                        if self.collect_prev_infos
+                        else None,
+                        prev_values=result["prev_values"]
+                        if self.collect_prev_infos
+                        else None,
+                        bootstrap_values=self.get_bootstrap_values(
+                            env_output.get("final_obs", None)
+                        ),
+                        save_flags=save_flags,
+                        forward_inputs=result["forward_inputs"],
+                        versions=torch.full_like(
+                            result["prev_logprobs"],
+                            float(self.version),
+                            dtype=torch.float32,
+                        ),
+                    )
+                self.send_rollout_result(output_channel, rollout_result, mode="train")
+        for _ in range(self.num_pipeline_stages):
+            env_output = await self.recv_env_output(input_channel)
+            rollout_result = None
+            if self._should_skip_rollout(env_output):
+                rollout_result = self._make_synthetic_rollout_result(
+                    env_output,
+                    include_actions=False,
+                )
+                if rollout_result is not None:
+                    self.log_info(
+                        "Skipping final bootstrap rollout because next_intervene_flag is true for the full batch."
+                    )
+            if rollout_result is None:
+                actions, result = self.predict(env_output["obs"])
+                self._update_rollout_specs(result)
+
                 rollout_result = RolloutResult(
                     actions=actions,
-                    prev_logprobs=result["prev_logprobs"]
-                    if self.collect_prev_infos
-                    else None,
                     prev_values=result["prev_values"]
                     if self.collect_prev_infos
                     else None,
                     bootstrap_values=self.get_bootstrap_values(
                         env_output.get("final_obs", None)
                     ),
-                    save_flags=save_flags,
-                    forward_inputs=result["forward_inputs"],
-                    versions=torch.full_like(
-                        result["prev_logprobs"],
-                        float(self.version),
-                        dtype=torch.float32,
-                    ),
                 )
-                self.send_rollout_result(output_channel, rollout_result, mode="train")
-        for _ in range(self.num_pipeline_stages):
-            env_output = await self.recv_env_output(input_channel)
-            actions, result = self.predict(env_output["obs"])
-
-            rollout_result = RolloutResult(
-                actions=actions,
-                prev_values=result["prev_values"] if self.collect_prev_infos else None,
-                bootstrap_values=self.get_bootstrap_values(
-                    env_output.get("final_obs", None)
-                ),
-            )
             self.send_rollout_result(output_channel, rollout_result, mode="train")
 
     async def generate(
@@ -517,6 +663,9 @@ class MultiStepRolloutWorker(Worker):
             for obs_batch in obs_batches
         ]
         final_obs_list = [obs_batch.get("final_obs", None) for obs_batch in obs_batches]
+        next_intervene_flags = [
+            obs_batch.get("next_intervene_flag", None) for obs_batch in obs_batches
+        ]
 
         def _merge_obs_dicts(dicts: list[dict[str, Any]]) -> dict[str, Any]:
             merged: dict[str, Any] = {}
@@ -544,7 +693,15 @@ class MultiStepRolloutWorker(Worker):
             ]
             merged_final_obs = _merge_obs_dicts(final_obs_or_obs)
 
-        return {"obs": merged_obs, "final_obs": merged_final_obs}
+        merged_next_intervene_flag = None
+        if any(flag is not None for flag in next_intervene_flags):
+            merged_next_intervene_flag = torch.cat(next_intervene_flags, dim=0)
+
+        return {
+            "obs": merged_obs,
+            "final_obs": merged_final_obs,
+            "next_intervene_flag": merged_next_intervene_flag,
+        }
 
     def send_chunk_actions(
         self,

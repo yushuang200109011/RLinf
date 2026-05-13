@@ -250,6 +250,7 @@ class CollectEpisode(gym.Wrapper):
 
             if expert_actions is not None and "intervene_action" not in step_info:
                 if "final_info" in step_info:
+                    # FIXME: this branch should never used in realworld
                     step_info["final_info"]["intervene_action"] = expert_actions
                     if save_flags is not None:
                         step_info["final_info"]["intervene_flag"] = torch.ones(

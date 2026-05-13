@@ -12,73 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Rolling LeRobot dataset loader for on-policy RL data collected during training.
-
-The expected directory layout produced by the environment's data-collection
-wrapper is::
-
-    root_dir/
-    ├── rank_0/
-    │   ├── id_0/      <- completed LeRobot sub-dataset
-    │   │   ├── meta/info.json
-    │   │   ├── meta/episodes.jsonl
-    │   │   └── data/chunk-000/episode_000000.parquet
-    │   ├── id_64/
-    │   ├── ...
-    │   ├── id_512/    <- last safe sub-dataset
-    │   └── id_576/    <- currently being written — EXCLUDED
-    ├── rank_1/
-    │   └── ...
-    └── rank_N/
-        └── ...
-
-Sub-datasets are sorted numerically by the integer in their ``id_N`` folder
-name.  The last ``skip_last_n`` sub-datasets **per rank** are excluded to avoid
-reading files that the environment worker is still writing.
-
-Shard roots (``rank_N/id_M/``) are recorded in ``RollingLeRobotDataset._sub_datasets``
-as :class:`~pathlib.Path` objects only.  A :class:`lerobot.common.datasets.lerobot_dataset.LeRobotDataset`
-is opened on demand when serving a cache miss (or whenever the decoded cache is
-disabled).  Chunk (multi-frame) sampling for OpenPI / DAgger uses LeRobot's
-``delta_timestamps`` mechanism.
-Optionally, ``require_all_intervene=True`` restricts the dataset to chunk
-starts whose non-padded frames all have ``intervene_flag`` set (see
-:class:`RollingLeRobotDataset`).
-
-Typical usage (recommended pattern with separate functions)::
-
-    dataset = build_rolling_lerobot_dataset(
-        root_dir="logs/20260402/maniskill",
-        chunk_size=16,  # action-chunk window for OpenPI / DAgger
-        skip_last_n=1,
-    )
-    loader = build_dataloader_from_dataset(
-        dataset,
-        batch_size=32,
-        world_size=1,
-        rank=0,
-    )
-
-    for epoch in range(num_epochs):
-        loader.sampler.set_epoch(epoch)
-        for batch in loader:
-            # batch["state"]   shape (B, chunk_size, state_dim)
-            # batch["actions"] shape (B, chunk_size, action_dim)
-            # batch["image"]   shape (B, chunk_size, C, H, W)
-            train_step(batch)
-
-        # Pick up newly completed sub-datasets written since the last epoch.
-        n_new = dataset.refresh()
-        if n_new:
-            # Rebuild only the dataloader, reusing the same dataset
-            loader = build_dataloader_from_dataset(
-                dataset,
-                batch_size=32,
-                world_size=1,
-                rank=0,
-            )
-"""
-
 from __future__ import annotations
 
 import bisect
@@ -104,8 +37,6 @@ from rlinf.utils.logging import get_logger
 
 logger = get_logger()
 
-# Parquet index / metadata columns that should not be chunked along the time
-# axis — they are scalar per frame and have no meaningful "window" semantics.
 _META_KEYS: frozenset[str] = frozenset(
     {"timestamp", "frame_index", "episode_index", "index", "task_index"}
 )
@@ -114,7 +45,6 @@ CacheIngestMode = Literal["new_shards", "last_n", "both"]
 
 
 def _deep_clone_sample(obj: Any) -> Any:
-    """Clone a LeRobot sample for storage or hand-out (tensors detached/cloned)."""
     if isinstance(obj, torch.Tensor):
         return obj.clone()
     if isinstance(obj, dict):
@@ -128,13 +58,6 @@ def _deep_clone_sample(obj: Any) -> Any:
 
 
 class DecodedTensorFifoCache:
-    """FIFO ring storing decoded training samples keyed by global frame index.
-
-    Each slot holds a full sample dict (tensors cloned; scalars / strings copied).
-    When the ring wraps, the oldest slot is overwritten and its global index
-    dropped from the lookup map.
-    """
-
     def __init__(self, capacity: int) -> None:
         self.capacity = max(int(capacity), 1)
         self._lock = threading.Lock()
@@ -176,7 +99,6 @@ class DecodedTensorFifoCache:
             self._next_slot = (slot + 1) % self.capacity
 
     def cached_indices(self) -> frozenset[int]:
-        """Return the global frame indices currently stored in the cache."""
         with self._lock:
             return frozenset(self._global_to_slot.keys())
 
@@ -201,34 +123,11 @@ def _is_lerobot_dataset(path: Path) -> bool:
 
 
 def _extract_id(path: Path) -> float:
-    """Extract the integer suffix from an ``id_N`` folder name.
-
-    Returns ``float("inf")`` for names that do not match so that malformed
-    directories sort after all valid ones.
-    """
     m = re.search(r"(\d+)$", path.name)
     return float(m.group(1)) if m else float("inf")
 
 
 def _discover_safe_datasets(root_dir: Path, skip_last_n: int) -> list[Path]:
-    """Walk *root_dir* and return all safe (non-in-progress) sub-dataset paths.
-
-    Structure assumed::
-
-        root_dir/rank_N/id_M/   <- LeRobot sub-dataset
-
-    For each ``rank_N`` subdirectory the ``id_M`` children are sorted by their
-    numeric suffix and the last ``skip_last_n`` are excluded **per rank**.  All
-    safe paths across all ranks are returned in a stable order (rank asc, id
-    asc).
-
-    Args:
-        root_dir: Root directory containing one or more ``rank_N`` directories.
-        skip_last_n: Number of latest sub-datasets to exclude per rank.
-
-    Returns:
-        Sorted list of ``Path`` objects pointing to safe sub-dataset roots.
-    """
     safe: list[Path] = []
 
     if not root_dir.is_dir():
@@ -252,10 +151,6 @@ def _discover_safe_datasets(root_dir: Path, skip_last_n: int) -> list[Path]:
 
 
 def _delta_offsets_for_sub_dataset(sub_ds: Any) -> list[int]:
-    """Temporal offsets (in frames) for one LeRobot chunk sample.
-
-    Mirrors :meth:`lerobot.common.datasets.lerobot_dataset.LeRobotDataset._get_query_indices`.
-    """
     if getattr(sub_ds, "delta_indices", None) is None:
         return [0]
     first_key = next(iter(sub_ds.delta_indices))
@@ -263,7 +158,6 @@ def _delta_offsets_for_sub_dataset(sub_ds: Any) -> list[int]:
 
 
 def _hf_column_to_numpy_bool_1d(hf_dataset: Any, col: str) -> np.ndarray:
-    """Load a per-row boolean column as ``(num_rows,)`` bool numpy array."""
     raw = hf_dataset[col]
     if isinstance(raw, torch.Tensor):
         t = raw
@@ -285,14 +179,6 @@ def _compute_intervene_valid_local_indices(
     sub_ds: Any,
     intervene_flag_key: str,
 ) -> list[int]:
-    """Return local frame indices whose chunk has ``intervene_flag=True`` on every non-padded step.
-
-    Padding follows LeRobot's episode-local clamping: padded timesteps are ignored
-    (no ``intervene_flag`` requirement on padded slots).
-
-    If *intervene_flag_key* is absent from the HF dataset, logs a warning and
-    treats every frame index as valid (same as no filtering for that shard).
-    """
     hf = sub_ds.hf_dataset
     n = len(hf)
     if n == 0:
@@ -335,8 +221,6 @@ def _compute_intervene_valid_local_indices(
 
 @dataclass(frozen=True)
 class _ShardIndexProbe:
-    """Result of probing one LeRobot shard during :meth:`RollingLeRobotDataset._build_index`."""
-
     ds_path: Path
     ok: bool
     sub_ds: Any | None = None
@@ -348,18 +232,6 @@ class _ShardIndexProbe:
 def _build_delta_timestamps(
     info: dict, chunk_size: int, action_sequence_keys
 ) -> dict[str, list[float]]:
-    """Build a ``delta_timestamps`` dict for LeRobotDataset chunk sampling.
-
-    All data features (i.e. keys that are not index/metadata columns) receive
-    the same temporal window ``[0, 1/fps, …, (chunk_size-1)/fps]``.
-
-    Args:
-        info: Parsed ``meta/info.json`` content.
-        chunk_size: Number of consecutive frames per sample.
-
-    Returns:
-        Dict mapping feature key → list of relative timestamps in seconds.
-    """
     fps: float = info["fps"]
     timestamps = [i / fps for i in range(chunk_size)]
     data_keys = action_sequence_keys if action_sequence_keys is not None else []
@@ -372,34 +244,6 @@ def _build_delta_timestamps(
 
 
 class InMemoryArrowStore:
-    """Append-only in-memory frame store backed by per-episode Arrow tables.
-
-    Provides chunk sampling with episode-boundary clamping and ``*_is_pad``
-    masks that are **bit-for-bit identical** to
-    :meth:`~lerobot.common.datasets.lerobot_dataset.LeRobotDataset.__getitem__`
-    without any disk I/O.
-
-    Each episode is stored as an independent HuggingFace
-    :class:`datasets.Dataset` (Arrow table).  Appending a new episode is
-    O(1) — no ``concatenate_datasets`` copy.  Random access requires an
-    O(log N_episodes) binary search to locate the correct episode, then
-    O(chunk_size) Arrow ``select`` rows for the chunk window.
-
-    The HuggingFace ``Features`` schema is **inferred automatically** from
-    the first episode's frame dicts, so the caller does not need to know the
-    feature layout up front.
-
-    Args:
-        chunk_size: Consecutive frames per sample.  ``<= 1`` disables
-            chunking (single-frame output with no ``delta_indices``).
-        action_sequence_keys: Keys to apply chunk sampling to.  Determines
-            which keys appear as ``[chunk_size, …]`` tensors and get
-            companion ``*_is_pad`` masks.
-        fps: Frames per second used for the ``timestamp`` metadata column.
-        image_transforms: Optional callable applied to image tensors after
-            ``hf_transform_to_torch`` converts PIL → float32 ``[C,H,W]``.
-    """
-
     def __init__(
         self,
         chunk_size: int = 1,
@@ -430,11 +274,6 @@ class InMemoryArrowStore:
 
     @staticmethod
     def _infer_hf_features(frame: dict) -> tuple[Any, set[str]]:
-        """Derive a HuggingFace ``Features`` schema from a raw frame dict.
-
-        Returns the schema and the set of keys that hold image arrays
-        (``uint8 [H, W, C]``).
-        """
         import datasets as hf_datasets
 
         meta_features: dict[str, Any] = {
@@ -480,15 +319,6 @@ class InMemoryArrowStore:
     # ------------------------------------------------------------------
 
     def add_episode(self, ep_frames: list[dict]) -> None:
-        """Append *ep_frames* as a new episode; O(1) Arrow table creation.
-
-        The HuggingFace features schema is inferred lazily from the first
-        episode so callers do not need to specify it up front.
-
-        Args:
-            ep_frames: Per-step frame dicts as produced by
-                :meth:`~rlinf.envs.wrappers.collect_episode.CollectEpisode._buffer_to_lerobot_ep`.
-        """
         import PIL.Image as PILImage
         from datasets import Dataset
         from lerobot.common.datasets.utils import hf_transform_to_torch
@@ -561,18 +391,6 @@ class InMemoryArrowStore:
         return len(self._episode_datasets)
 
     def __getitem__(self, local_idx: int) -> dict[str, Any]:
-        """Fetch one sample with a chunk window identical to LeRobot's output.
-
-        Args:
-            local_idx: Frame index within this shard (0-based).
-
-        Returns:
-            Dict of tensors.  When ``chunk_size > 1``, keys listed in
-            ``delta_indices`` are replaced by ``[chunk_size, …]`` tensors and
-            companion ``*_is_pad`` bool tensors are added — matching
-            :class:`~lerobot.common.datasets.lerobot_dataset.LeRobotDataset`
-            ``__getitem__`` output exactly.
-        """
         local_idx = max(0, min(local_idx, self._total_frames - 1))
         self._hits += 1
         ep_idx = bisect.bisect_right(self._ep_to, local_idx)
@@ -616,15 +434,6 @@ class InMemoryArrowStore:
         return item
 
     def stats(self) -> dict[str, Any]:
-        """Return access counter and current store size.
-
-        Returns:
-            Dictionary with keys:
-
-            * ``in_memory_store_episodes`` – number of episodes in this shard.
-            * ``in_memory_store_frames`` – total frames in this shard.
-            * ``in_memory_store_hits`` – number of ``__getitem__`` calls.
-        """
         return {
             "in_memory_store_episodes": len(self._episode_datasets),
             "in_memory_store_frames": self._total_frames,
@@ -637,12 +446,6 @@ def _compute_intervene_valid_local_indices_in_memory(
     intervene_flag_key: str,
     chunk_size: int,
 ) -> list[int]:
-    """Like :func:`_compute_intervene_valid_local_indices` for :class:`InMemoryArrowStore`.
-
-    Uses the same padding and per-chunk flag rules as the LeRobot path so
-    index construction matches disk-backed shards without opening
-    :class:`~lerobot.common.datasets.lerobot_dataset.LeRobotDataset`.
-    """
     n = len(store)
     if n == 0:
         return []
@@ -699,97 +502,6 @@ def _compute_intervene_valid_local_indices_in_memory(
 
 
 class RollingLeRobotDataset(Dataset):
-    """PyTorch Dataset that loads frames from a rolling collection of LeRobot
-    sub-datasets written incrementally during RL training.
-
-    Each sub-dataset path (``rank_N/id_M/``) is stored in ``_sub_datasets``; a
-    :class:`lerobot.common.datasets.lerobot_dataset.LeRobotDataset` is opened
-    lazily when a sample is read (decoded-cache hit avoids opening).  Chunk
-    sampling is implemented through LeRobot's ``delta_timestamps`` mechanism:
-    each sample is ``chunk_size`` consecutive frames, with boundary clamping
-    and ``*_is_pad`` masks handled by LeRobot automatically.  When the decoded
-    FIFO cache is enabled, each cached entry is that full window (identical to
-    a single ``__getitem__`` result), not a single raw frame.
-
-    When ``chunk_size=1`` (default) no ``delta_timestamps`` are set and each
-    sample is a single frame, backward-compatible with single-step RL training.
-
-    Args:
-        root_dir: Root directory containing ``rank_N/id_M/`` sub-datasets.
-        skip_last_n: Number of latest sub-datasets to exclude per rank to
-            avoid read/write conflicts with the writer.  Defaults to ``1``.
-        chunk_size: Number of consecutive frames per sample.  Defaults to
-            ``1`` (single-frame).  Set to the model's action-chunk horizon for
-            OpenPI / DAgger training.
-        delta_timestamps: Explicit ``delta_timestamps`` dict passed to each
-            :class:`LeRobotDataset`.  When ``None`` and ``chunk_size > 1``,
-            a dict is auto-generated from ``meta/info.json`` (all data keys,
-            window ``[0, 1/fps, …, (chunk_size-1)/fps]``).  Ignored when
-            ``chunk_size <= 1``.
-        keys: If provided, ``__getitem__`` filters the returned dict to only
-            these keys.  ``None`` returns every key from LeRobotDataset.
-        image_transforms: Optional callable passed directly to each
-            :class:`LeRobotDataset` as ``image_transforms``.
-        min_frames: Minimum total number of frames required before the dataset
-            is considered ready.  Construction blocks until this threshold is
-            met.  Defaults to ``1``.
-        wait_interval_s: Seconds to sleep between readiness polls when fewer
-            than ``min_frames`` total frames are available.  Defaults to
-            ``10.0``.
-        action_sequence_keys: Keys to apply ``delta_timestamps`` chunking to.
-            Defaults to ``["actions"]``.
-        enable_decoded_cache: If ``True``, maintain a FIFO in-memory cache of
-            fully decoded samples (see :class:`DecodedTensorFifoCache`).
-            Use ``num_workers=0`` on the DataLoader so workers see the same
-            cache (forked workers do not share updates).
-        decoded_cache_capacity: Number of samples in the FIFO ring.
-        cache_ingest_mode: ``new_shards`` — on refresh, ingest only global
-            indices from newly added sub-datasets; ``last_n`` — each refresh,
-            ingest the last ``cache_last_n_frames`` indices; ``both`` —
-            combine both.
-        cache_last_n_frames: Tail length for ``last_n`` / ``both`` modes.
-        cache_ingest_max_frames: Optional cap on how many frames to ingest per
-            ``refresh()`` call (``None`` = no cap).
-        require_all_intervene: When ``True``, only chunk starts where every
-            **non-padded** frame in the temporal window has
-            ``intervene_flag_key=True`` are exposed to the sampler (dataset
-            length and indices are restricted accordingly).  For
-            ``chunk_size=1`` this reduces to single-frame filtering.  When the
-            flag column is missing from a shard, that shard falls back to all
-            starts (with a warning).
-        intervene_flag_key: Parquet / HF column name for the per-frame bool
-            flag (default ``"intervene_flag"``).
-        window_size: If set to a positive integer, the dataset length and
-            sampling only cover the last ``window_size`` **logical** frames
-            (i.e. frames actually exposed to the sampler).  When
-            ``require_all_intervene`` is active, logical frames are the
-            intervene-valid subset, so ``window_size=1000`` always means
-            "the last 1000 usable samples" regardless of intervene density.
-            Without intervene filtering logical == physical, so the behavior
-            is equivalent to a physical-frame window.  Analogous to
-            ``TrajectoryReplayBuffer.sample_window_size`` in
-            :mod:`rlinf.data.replay_buffer` but counted in frames instead of
-            trajectories.  ``None`` or ``0`` disables windowing (full history).
-        index_load_workers: How many threads may open distinct sub-dataset
-            paths in parallel during :meth:`refresh` / initial index build.
-            ``1`` keeps the original sequential behavior.  Values ``> 1``
-            use :class:`~concurrent.futures.ThreadPoolExecutor` so metadata
-            and parquet-backed HuggingFace dataset construction can overlap
-            across shards.  Multiprocessing is not used: child processes
-            cannot return live :class:`~lerobot.common.datasets.lerobot_dataset.LeRobotDataset`
-            handles to the parent for ``out_open_handles`` / decoded-cache
-            ingest without reopening every shard.
-        cache_ingest_rank: Rank of the current process for sharding cache
-            ingest across distributed workers.  When ``cache_ingest_world_size
-            > 1``, only every ``cache_ingest_world_size``-th index (offset
-            by ``cache_ingest_rank``) is ingested, so each rank pre-fills a
-            disjoint slice of the frame space — reducing total CPU memory by
-            roughly ``cache_ingest_world_size`` x.  Defaults to ``0``.
-        cache_ingest_world_size: Total number of distributed replicas
-            participating in cache ingest sharding.  ``1`` (default) disables
-            sharding and ingests all indices (original behavior).
-    """
-
     def __init__(
         self,
         root_dir: str | Path,
@@ -862,21 +574,11 @@ class RollingLeRobotDataset(Dataset):
         # Running total of episodes across all loaded sub-datasets.
         self._total_episodes: int = 0
 
-        # Shard cache: when ``in_memory_mode=True``, newly written shards are
-        # kept in RAM (keyed by their disk path) so that
-        # ``_load_item_from_lerobot`` can serve frames from RAM instead of
-        # reading them back from disk.  Disk writes are kept as a persistence
-        # sidecar.  When a shard scrolls fully out of ``window_size`` it is
-        # evicted from RAM; the disk copy remains as a transparent fallback.
         self._shard_cache_enabled: bool = bool(in_memory_mode)
         self._in_memory_shards: dict[Path, InMemoryArrowStore] = {}
-        # Config kept so per-shard InMemoryArrowStore instances can be built
-        # in add_shard_to_memory without requiring the caller to repeat params.
         self._shard_cache_chunk_size: int = chunk_size
         self._shard_cache_fps: int = max(1, int(fps))
         self._shard_cache_action_keys: list[str] = list(action_sequence_keys or [])
-        # Hit/miss counters for the shard-level cache lookup in
-        # _load_item_from_lerobot (shard found in RAM vs. fell back to disk).
         self._shard_cache_hits: int = 0
         self._shard_cache_misses: int = 0
         self._build_index(_discover_safe_datasets(self.root_dir, self.skip_last_n))
@@ -910,20 +612,6 @@ class RollingLeRobotDataset(Dataset):
         return self.window_size is not None and int(self.window_size) > 0
 
     def _update_window_sampling_bounds(self) -> None:
-        """Recompute window slice offsets so ``window_size`` caps **logical** frames.
-
-        *Logical frames* are the frames actually exposed by ``__len__`` /
-        ``__getitem__``: when ``require_all_intervene`` is active they are the
-        intervene-valid subset; otherwise every physical frame is logical.
-
-        Without intervene filtering (``_valid_physical_indices is None``),
-        physical == logical, so ``_window_physical_start`` is set to
-        ``max(0, total_physical - window_size)`` exactly as before.
-
-        With intervene filtering, the last ``window_size`` entries of
-        ``_valid_physical_indices`` are kept, making the user-facing dataset
-        length deterministic (``min(num_valid, window_size)``).
-        """
         n = self._num_physical_frames()
         if not self._window_enabled():
             self._window_physical_start = 0
@@ -947,13 +635,6 @@ class RollingLeRobotDataset(Dataset):
     # ------------------------------------------------------------------
 
     def _get_delta_timestamps(self, ds_path: Path) -> dict[str, list[float]] | None:
-        """Return delta_timestamps for *ds_path*, or None for single-frame.
-
-        When ``delta_timestamps`` was not passed to the constructor, auto values
-        are derived from each shard's ``meta/info.json`` (typically identical
-        fps across a rolling run).  Not stored per shard — recomputed on each
-        lazy :class:`LeRobotDataset` open.
-        """
         if self.chunk_size <= 1:
             return None
         if self._user_delta_timestamps is not None:
@@ -963,14 +644,6 @@ class RollingLeRobotDataset(Dataset):
         return _build_delta_timestamps(info, self.chunk_size, self.action_sequence_keys)
 
     def _probe_shard_for_index(self, ds_path: Path) -> _ShardIndexProbe:
-        """Open *ds_path* once and return length / optional intervene mask (thread-safe per path).
-
-        When ``in_memory_mode`` is enabled and *ds_path* is already present in
-        :attr:`_in_memory_shards` (typically because :meth:`add_shard_to_memory`
-        ran after the writer finalized the shard), metadata is taken from the
-        in-memory store so :class:`~lerobot.common.datasets.lerobot_dataset.LeRobotDataset`
-        is not opened for indexing.
-        """
         ds_path = Path(ds_path)
         if self._shard_cache_enabled:
             store = self._in_memory_shards.get(ds_path)
@@ -1032,23 +705,6 @@ class RollingLeRobotDataset(Dataset):
         datasets: list[Path],
         out_open_handles: dict[Path, Any] | None = None,
     ) -> int:
-        """Index *datasets*: open each briefly to measure length / intervene mask, then store paths only.
-
-        When :attr:`_index_load_workers` is greater than ``1`` and there are
-        multiple pending shards, openings run in a thread pool (I/O overlap).
-        Merge into :attr:`_cumulative_lengths` stays sequential so global
-        frame order matches *datasets* order.
-
-        Args:
-            datasets: Sub-dataset root paths to load.
-            out_open_handles: When not ``None``, each successfully opened
-                :class:`LeRobotDataset` is stored under its root path so a
-                matching :meth:`_ingest_decoded_cache` call can reuse it instead
-                of opening the same shard twice in one :meth:`refresh`.
-
-        Returns:
-            Number of new sub-datasets successfully added.
-        """
         pending = [p for p in datasets if p not in self._indexed_datasets]
         n_new = 0
         if not pending:
@@ -1124,16 +780,6 @@ class RollingLeRobotDataset(Dataset):
         return item
 
     def _load_item_from_lerobot(self, idx: int) -> dict[str, Any]:
-        """Fetch one sample (including chunk windows) from the backing store.
-
-        When ``in_memory_mode=True`` and the shard containing *idx* is cached,
-        the :class:`InMemoryArrowStore` for that shard is used directly,
-        avoiding any disk I/O.  Falls through to the LeRobot disk path when
-        the shard is not cached (e.g. older shards evicted from RAM).
-        Either way the returned dict is key-filtered by ``self.keys`` and has
-        the same chunk / ``*_is_pad`` structure produced by
-        :class:`~lerobot.common.datasets.lerobot_dataset.LeRobotDataset`.
-        """
         ds_idx = bisect.bisect_right(self._cumulative_lengths, idx) - 1
         local_idx = idx - self._cumulative_lengths[ds_idx]
         if self._shard_cache_enabled:
@@ -1154,14 +800,6 @@ class RollingLeRobotDataset(Dataset):
         physical_indices: list[int],
         reuse_open_by_path: dict[Path, Any] | None,
     ) -> None:
-        """Fill the decoded cache for *physical_indices* with at most one open per shard.
-
-        Indices are grouped by backing sub-dataset.  Each shard is opened once
-        (or taken from *reuse_open_by_path* for paths just indexed in the same
-        ``refresh()``), samples are read in sorted global order, then the lazy
-        handle :attr:`_lerobot_open` is cleared so ingest does not retain
-        extra LeRobot handles.
-        """
         cache = self._decoded_cache
         if cache is None or not physical_indices:
             return
@@ -1205,18 +843,6 @@ class RollingLeRobotDataset(Dataset):
         n_new: int,
         reuse_open_by_path: dict[Path, Any] | None = None,
     ) -> None:
-        """Populate FIFO cache according to ``cache_ingest_mode``.
-
-        ``physical_before`` / ``physical_after`` are cumulative **physical**
-        frame counts (unfiltered) immediately before vs. after a refresh that
-        appended new shards; they define the half-open index range for the
-        ``new_shards`` ingest path.
-
-        Args:
-            reuse_open_by_path: Optional map of sub-dataset root → already-open
-                :class:`LeRobotDataset` built during :meth:`_build_index` in the
-                same operation, so ingest does not open those paths a second time.
-        """
         cache = self._decoded_cache
         if cache is None:
             return
@@ -1249,24 +875,6 @@ class RollingLeRobotDataset(Dataset):
     # ------------------------------------------------------------------
 
     def add_shard_to_memory(self, path: str | Path, episodes: list[list[dict]]) -> None:
-        """Populate the in-memory shard cache for *path* with *episodes*.
-
-        Should be called by the actor worker immediately after a shard is
-        finalized on disk (via
-        :meth:`~rlinf.data.lerobot_writer.LeRobotDatasetWriter.finalize`),
-        so the next :meth:`__getitem__` call for any frame in that shard can
-        be served from RAM instead of reading back from disk.
-
-        Thread-safe.  No-op when ``in_memory_mode=False``.
-
-        Args:
-            path: Root path of the finalized shard, matching the ``repo_id``
-                passed to
-                :meth:`~rlinf.data.lerobot_writer.LeRobotDatasetWriter.create`.
-            episodes: Ordered list of episodes in the shard; each episode is a
-                ``list[dict]`` of per-step frame dicts as produced by
-                :meth:`~rlinf.envs.wrappers.collect_episode.CollectEpisode._buffer_to_lerobot_ep`.
-        """
         if not self._shard_cache_enabled or not episodes:
             return
         store = InMemoryArrowStore(
@@ -1289,17 +897,6 @@ class RollingLeRobotDataset(Dataset):
             )
 
     def _evict_stale_shards(self) -> int:
-        """Remove shard stores from RAM whose frames are all before the window.
-
-        Must be called under :attr:`_rolling_access_lock`, after
-        :meth:`_update_window_sampling_bounds`.  Shards whose cumulative end
-        frame index ``<= _window_physical_start`` lie fully outside the
-        sampling window and their Arrow tables are freed from RAM; the disk
-        copy remains as a transparent fallback.
-
-        Returns:
-            Number of shard stores evicted.
-        """
         if not self._in_memory_shards or not self._window_enabled():
             return 0
         n_evicted = 0
@@ -1322,14 +919,6 @@ class RollingLeRobotDataset(Dataset):
     # ------------------------------------------------------------------
 
     def _refresh_impl(self, new_paths: list[Path]) -> int:
-        """Shared implementation for :meth:`refresh` and :meth:`refresh_one`.
-
-        Indexes *new_paths*, optionally ingests them into the decoded cache,
-        and cleans up transient open handles.
-
-        Returns:
-            Number of new sub-datasets successfully added.
-        """
         if not new_paths:
             return 0
         physical_before = self._num_physical_frames()
@@ -1370,29 +959,11 @@ class RollingLeRobotDataset(Dataset):
         return n_new
 
     def refresh(self) -> int:
-        """Ingest newly available data.
-
-        Re-scans ``root_dir`` for newly completed LeRobot sub-datasets,
-        optionally ingests them into the decoded FIFO cache, and (when
-        ``in_memory_mode=True``) evicts shard stores that have scrolled out
-        of the rolling window.
-
-        Returns:
-            Number of new sub-datasets added; ``0`` if nothing changed.
-        """
         safe = _discover_safe_datasets(self.root_dir, self.skip_last_n)
         new_paths = [p for p in safe if p not in self._indexed_datasets]
         return self._refresh_impl(new_paths)
 
     def refresh_one(self) -> int:
-        """Ingest one new sub-dataset (at most) per call.
-
-        Bounds I/O for tight polling loops.  In disk mode at most one new
-        sub-dataset is indexed per call.
-
-        Returns:
-            Number of items added; ``0`` if nothing changed.
-        """
         safe = _discover_safe_datasets(self.root_dir, self.skip_last_n)
         new_paths = [p for p in safe if p not in self._indexed_datasets]
         if not new_paths:
@@ -1436,21 +1007,6 @@ class RollingLeRobotDataset(Dataset):
         return n
 
     def get_cache_aligned_logical_indices(self) -> list[int] | None:
-        """Return logical indices whose physical counterparts are in this rank's decoded cache.
-
-        When ``cache_ingest_world_size > 1``, each rank only ingests a strided
-        shard of physical frame indices.  The
-        :class:`~rlinf.data.utils.DistributedRandomReplacementSampler`, however,
-        draws logical indices uniformly — which can land on physical indices not
-        present in this rank's cache, causing misses.
-
-        This method returns the subset of logical indices ``[0, len(self))``
-        whose physical counterparts are currently cached, so a cache-aligned
-        sampler can restrict drawing to those indices only.
-
-        Returns ``None`` when alignment is unnecessary (no decoded cache, or
-        ``cache_ingest_world_size <= 1``).
-        """
         if self._decoded_cache is None or self._cache_ingest_world_size <= 1:
             return None
         cached = self._decoded_cache.cached_indices()
@@ -1497,41 +1053,6 @@ class RollingLeRobotDataset(Dataset):
 
 
 class PreloadRollingLeRobotDataset:
-    """Prefetches batches from a DataLoader-backed :class:`RollingLeRobotDataset`.
-
-    Uses exactly the same :func:`build_dataloader_from_dataset` call
-    (``DistributedSampler`` or ``DistributedRandomReplacementSampler``) as the
-    non-preload path, then adds a daemon thread that iterates through DataLoader
-    epochs in the background and stores ready batches in a bounded queue.
-
-    This means both paths share the same sampler semantics (distributed
-    sharding, epoch-seeded shuffling, with/without replacement) and differ
-    only in whether batches are fetched synchronously or pre-fetched.
-
-    :meth:`__len__` mirrors ``len(data_loader)`` so the consumer can drive
-    the same gradient-accumulation logic regardless of which path is active.
-
-    When new sub-datasets arrive, :meth:`refresh` rebuilds the DataLoader
-    with the updated dataset length.  The background thread detects the swap
-    at the start of the next batch and seamlessly continues from the new
-    loader.
-
-    Args:
-        dataset: The :class:`RollingLeRobotDataset` to prefetch from.
-        batch_size: Forwarded to :func:`build_dataloader_from_dataset`.
-        world_size: Number of distributed replicas.  Defaults to ``1``.
-        rank: Rank of the current process.  Defaults to ``0``.
-        prefetch_size: Maximum number of batches buffered in the queue.
-            Defaults to ``5``.
-        use_random_replacement: Passed to :func:`build_dataloader_from_dataset`.
-            Defaults to ``True``.
-        num_samples_per_epoch: Samples per epoch for the internal sampler.
-        seed: Random seed forwarded to the sampler.
-        num_workers: DataLoader worker processes.  Defaults to ``4``.
-        **dataloader_kwargs: Extra kwargs forwarded to
-            :func:`build_dataloader_from_dataset`.
-    """
-
     def __init__(
         self,
         dataset: RollingLeRobotDataset,
@@ -1593,14 +1114,6 @@ class PreloadRollingLeRobotDataset:
         )
 
     def _sample_worker(self) -> None:
-        """Background thread: iterate DataLoader epochs and enqueue batches.
-
-        Holds a local reference to the current DataLoader.  When
-        :meth:`refresh` installs a new one (under ``_loader_lock``), the
-        thread detects the swap at the top of the loop and resets its
-        iterator.  Epoch counter and sampler ``set_epoch`` calls are managed
-        here so the background stream is always correctly shuffled.
-        """
         current_loader: DataLoader | None = None
         loader_iter = None
 
@@ -1657,13 +1170,6 @@ class PreloadRollingLeRobotDataset:
         return len(self._loader)
 
     def __iter__(self) -> Iterator[dict[str, Any]]:
-        """Return an infinite iterator of prefetched batches.
-
-        Starts the background sampling thread on the first call.
-
-        Yields:
-            Collated batch dict produced by the internal DataLoader.
-        """
         if self.sample_thread is None:
             self.sample_thread = threading.Thread(
                 target=self._sample_worker, daemon=True
@@ -1684,16 +1190,6 @@ class PreloadRollingLeRobotDataset:
                 continue
 
     def refresh(self) -> int:
-        """Refresh the dataset and rebuild the DataLoader if new data arrived.
-
-        Calls :meth:`RollingLeRobotDataset.refresh`.  When new sub-datasets
-        are discovered, rebuilds the internal :class:`~torch.utils.data.DataLoader`
-        (updating sampler length to reflect the larger dataset) and stores it
-        under ``_loader_lock`` so the background thread picks it up cleanly.
-
-        Returns:
-            Number of new sub-datasets added (0 if nothing changed).
-        """
         n_new = self.dataset.refresh()
         if n_new > 0:
             with self._loader_lock:
@@ -1701,15 +1197,6 @@ class PreloadRollingLeRobotDataset:
         return n_new
 
     def refresh_one(self) -> int:
-        """Like :meth:`refresh`, but loads at most one new sub-dataset.
-
-        Delegates to :meth:`RollingLeRobotDataset.refresh_one` and rebuilds
-        the DataLoader when a new shard is picked up.  Call repeatedly in a
-        polling loop for incremental, bounded-cost refreshes.
-
-        Returns:
-            ``1`` if a new sub-dataset was added, ``0`` otherwise.
-        """
         n_new = self.dataset.refresh_one()
         if n_new > 0:
             with self._loader_lock:
@@ -1764,46 +1251,6 @@ def build_rolling_lerobot_dataset(
     in_memory_mode: bool = False,
     fps: int = 10,
 ) -> RollingLeRobotDataset:
-    """Build a :class:`RollingLeRobotDataset` for rolling data collection.
-
-    Args:
-        root_dir: Root directory containing ``rank_N/id_M/`` sub-datasets.
-        skip_last_n: Latest sub-datasets to exclude per rank.  Defaults to
-            ``1`` to avoid reading the sub-dataset currently being written.
-        chunk_size: Consecutive frames per sample.  Defaults to ``1``
-            (single-frame).  Set to the model's action-chunk horizon for
-            OpenPI / DAgger training.
-        delta_timestamps: Explicit ``delta_timestamps`` passed to each
-            :class:`~lerobot.common.datasets.lerobot_dataset.LeRobotDataset`.
-            Auto-generated from ``chunk_size`` and fps when ``None``.
-        keys: Parquet column names to keep in each sample.  ``None`` keeps all
-            keys returned by LeRobotDataset.
-        image_transforms: Optional transform passed to each LeRobotDataset's
-            ``image_transforms`` argument.
-        min_frames: Minimum number of safe sub-datasets required before the
-            dataset returns.  Construction sleeps until the threshold is met.
-            Defaults to ``1``.
-        wait_interval_s: Seconds between readiness polls.  Defaults to ``10.0``.
-        action_sequence_keys: List of keys to apply chunking to.  Defaults to
-            ``["actions"]``.
-        enable_decoded_cache: Enable in-memory decoded FIFO cache.
-        decoded_cache_capacity: Ring capacity for decoded samples.
-        cache_ingest_mode: ``new_shards``, ``last_n``, or ``both``.
-        cache_last_n_frames: Tail size for ``last_n`` / ``both``.
-        cache_ingest_max_frames: Max ingests per ``refresh()`` (``None`` = unlimited).
-        require_all_intervene: See :class:`RollingLeRobotDataset`.
-        intervene_flag_key: Column name for the per-frame intervention flag.
-        window_size: Caps the dataset to the last ``window_size`` **logical**
-            frames.  See :class:`RollingLeRobotDataset`.
-        index_load_workers: Parallel thread count for opening sub-datasets
-            during index build (``1`` = sequential).  See
-            :class:`RollingLeRobotDataset`.
-        cache_ingest_rank: See :class:`RollingLeRobotDataset`.
-        cache_ingest_world_size: See :class:`RollingLeRobotDataset`.
-
-    Returns:
-        A :class:`RollingLeRobotDataset` instance.
-    """
     dataset = RollingLeRobotDataset(
         root_dir=root_dir,
         skip_last_n=skip_last_n,

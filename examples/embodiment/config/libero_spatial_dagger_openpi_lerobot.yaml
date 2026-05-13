@@ -49,7 +49,7 @@ algorithm:
     # only_save_expert controls dagger logic. 
     # If set False, all data will be re-labeled by expert and saved (classic-dagger)
     # If set True, only expert data will be saved (hg-dagger, always used in real-world exp)
-    only_save_expert: False
+    only_save_expert: True
 
   rollout_epoch: 1
   eval_rollout_epoch: 1

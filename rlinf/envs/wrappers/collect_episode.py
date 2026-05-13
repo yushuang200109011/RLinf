@@ -352,11 +352,26 @@ class CollectEpisode(gym.Wrapper):
                 self._pending_obs[env_idx] = self._slice_copy(obs, env_idx)
                 self._pending_info[env_idx] = self._slice_copy(info_no_reset, env_idx)
                 if "intervene_action" in env_info:
-                    env_info["intervene_action"] = env_info["intervene_action"][-1]
-                    env_info["intervene_flag"] = env_info["intervene_flag"][-1]
+                    action_dim = self._slice_data(action, env_idx).shape[-1]
+                    chunk_size = env_info["intervene_action"].reshape(-1, action_dim).shape[0]
+                    print(f"!!dbg point: action_dim: {action_dim}, intervene_action: {env_info['intervene_action'].shape}, intervene_flag: {env_info['intervene_flag'].shape}")
+                    env_info["intervene_action"] = env_info["intervene_action"].reshape(-1, action_dim)[-1]
+                    env_info["intervene_flag"] = env_info["intervene_flag"].reshape(chunk_size, -1)[-1, 0]
+                    print(f"!!!dbg2: intervene_action: {env_info['intervene_action'].shape}, intervene_flag: {env_info['intervene_flag'].shape}")
+                    # env_info["intervene_action"] = env_info["intervene_action"][-1]
+                    # env_info["intervene_flag"] = env_info["intervene_flag"][-1]
             else:
                 env_obs = self._slice_copy(obs, env_idx)
                 env_info = self._slice_copy(info, env_idx)
+                if "intervene_action" in env_info:
+                    action_dim = self._slice_data(action, env_idx).shape[-1]
+                    if env_info["intervene_action"].numel() > action_dim:
+                        # realworld, last step in a chunk, hold all intervene actions and reshaped into one
+                        chunk_size = env_info["intervene_action"].reshape(-1, action_dim).shape[0]
+                        print(f"!!rw point: action_dim: {action_dim}, intervene_action: {env_info['intervene_action'].shape}, intervene_flag: {env_info['intervene_flag'].shape}")
+                        env_info["intervene_action"] = env_info["intervene_action"].reshape(-1, action_dim)[-1]
+                        env_info["intervene_flag"] = env_info["intervene_flag"].reshape(chunk_size, -1)[-1, 0]
+                        print(f"!!!rw_point2: intervene_action: {env_info['intervene_action'].shape}, intervene_flag: {env_info['intervene_flag'].shape}")
                 if "final_observation" in env_info:
                     env_info.pop("final_observation")
                     env_info.pop("final_info")

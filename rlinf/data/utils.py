@@ -102,10 +102,6 @@ class DistributedRandomReplacementSampler(Sampler):
             torch.distributed.get_rank().
         seed: Base random seed. Each rank uses seed + epoch * num_replicas + rank.
         shuffle: Unused, kept for API compatibility with DistributedSampler.
-        valid_indices: When provided, sampling is restricted to this subset
-            of logical indices (drawn uniformly with replacement from the
-            list).  This is used for cache-aligned sampling when each rank
-            only has a shard of the decoded cache.
     """
 
     def __init__(
@@ -116,7 +112,6 @@ class DistributedRandomReplacementSampler(Sampler):
         rank: int | None = None,
         seed: int = 0,
         shuffle: bool = True,
-        valid_indices: list[int] | None = None,
     ) -> None:
         if num_replicas is None:
             if not torch.distributed.is_available():
@@ -137,7 +132,6 @@ class DistributedRandomReplacementSampler(Sampler):
         self.rank = rank
         self.epoch = 0
         self.seed = seed
-        self.valid_indices = valid_indices
 
         # Total samples across all ranks
         total_samples = num_samples if num_samples is not None else len(dataset)
@@ -150,16 +144,6 @@ class DistributedRandomReplacementSampler(Sampler):
         # Create generator with rank-specific seed
         g = torch.Generator()
         g.manual_seed(self.seed + self.epoch * self.num_replicas + self.rank)
-
-        if self.valid_indices is not None and len(self.valid_indices) > 0:
-            positions = torch.randint(
-                low=0,
-                high=len(self.valid_indices),
-                size=(self.num_samples,),
-                generator=g,
-                dtype=torch.int64,
-            )
-            return iter([self.valid_indices[p] for p in positions.tolist()])
 
         # Sample indices with replacement
         indices = torch.randint(
@@ -228,7 +212,6 @@ def build_dataloader_from_dataset(
     use_random_replacement: bool = False,
     num_samples_per_epoch: int | None = None,
     seed: int = 42,
-    cache_aligned_indices: list[int] | None = None,
     **kwargs: Any,
 ) -> DataLoader:
     """Build a :class:`DataLoader` from a :class:`RollingLeRobotDataset`.
@@ -258,11 +241,6 @@ def build_dataloader_from_dataset(
             Only used when ``use_random_replacement=True``.
         seed: Random seed for sampling. Only used when
             ``use_random_replacement=True``.
-        cache_aligned_indices: When provided, the
-            :class:`DistributedRandomReplacementSampler` restricts drawing to
-            this subset of logical indices.  Used for cache-aligned sampling
-            when each rank only holds a shard of the decoded cache.  Ignored
-            when ``use_random_replacement=False`` or ``world_size <= 1``.
         **kwargs: Additional keyword arguments forwarded to
             :class:`~torch.utils.data.DataLoader`.
 
@@ -306,7 +284,6 @@ def build_dataloader_from_dataset(
                 num_replicas=world_size,
                 rank=rank,
                 seed=seed,
-                valid_indices=cache_aligned_indices,
             )
         else:
             sampler = RandomReplacementSampler(

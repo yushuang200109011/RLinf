@@ -15,10 +15,8 @@
 from __future__ import annotations
 
 import bisect
-import copy
 import json
 import queue
-import re
 import threading
 import time
 from collections import deque
@@ -26,7 +24,7 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterator, Literal
+from typing import Any, Callable, Iterator
 
 import numpy as np
 import torch
@@ -40,115 +38,6 @@ logger = get_logger()
 _META_KEYS: frozenset[str] = frozenset(
     {"timestamp", "frame_index", "episode_index", "index", "task_index"}
 )
-
-CacheIngestMode = Literal["new_shards", "last_n", "both"]
-
-
-def _deep_clone_sample(obj: Any) -> Any:
-    if isinstance(obj, torch.Tensor):
-        return obj.clone()
-    if isinstance(obj, dict):
-        return {k: _deep_clone_sample(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        seq = [_deep_clone_sample(x) for x in obj]
-        return type(obj)(seq)
-    if isinstance(obj, (str, int, float, bool, type(None))):
-        return obj
-    return copy.deepcopy(obj)
-
-
-class DecodedTensorFifoCache:
-    def __init__(self, capacity: int) -> None:
-        self.capacity = max(int(capacity), 1)
-        self._lock = threading.Lock()
-        self._slot_global: list[int | None] = [None] * self.capacity
-        self._slot_payload: list[dict[str, Any] | None] = [None] * self.capacity
-        self._global_to_slot: dict[int, int] = {}
-        self._next_slot: int = 0
-        self._hits: int = 0
-        self._misses: int = 0
-
-    def try_get(self, global_idx: int) -> dict[str, Any] | None:
-        with self._lock:
-            slot = self._global_to_slot.get(global_idx)
-            if slot is None:
-                return None
-            self._hits += 1
-            payload = self._slot_payload[slot]
-            assert payload is not None
-            return _deep_clone_sample(payload)
-
-    def notify_miss(self) -> None:
-        with self._lock:
-            self._misses += 1
-
-    def put(self, global_idx: int, item: dict[str, Any]) -> None:
-        stored = _deep_clone_sample(item)
-        with self._lock:
-            if global_idx in self._global_to_slot:
-                slot = self._global_to_slot[global_idx]
-                self._slot_payload[slot] = stored
-                return
-            slot = self._next_slot
-            old_g = self._slot_global[slot]
-            if old_g is not None:
-                del self._global_to_slot[old_g]
-            self._slot_global[slot] = global_idx
-            self._slot_payload[slot] = stored
-            self._global_to_slot[global_idx] = slot
-            self._next_slot = (slot + 1) % self.capacity
-
-    def cached_indices(self) -> frozenset[int]:
-        with self._lock:
-            return frozenset(self._global_to_slot.keys())
-
-    def stats(self) -> dict[str, Any]:
-        with self._lock:
-            return {
-                "decoded_cache_capacity": self.capacity,
-                "decoded_cache_entries": len(self._global_to_slot),
-                "decoded_cache_hits": self._hits,
-                "decoded_cache_misses": self._misses,
-            }
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-
-def _is_lerobot_dataset(path: Path) -> bool:
-    """Return True if *path* looks like a completed LeRobot sub-dataset."""
-    return (path / "meta" / "info.json").is_file() and (path / "data").is_dir()
-
-
-def _extract_id(path: Path) -> float:
-    m = re.search(r"(\d+)$", path.name)
-    return float(m.group(1)) if m else float("inf")
-
-
-def _discover_safe_datasets(root_dir: Path, skip_last_n: int) -> list[Path]:
-    safe: list[Path] = []
-
-    if not root_dir.is_dir():
-        logger.warning("[RollingLeRobotDataset] root_dir does not exist: %s", root_dir)
-        return safe
-
-    rank_dirs = sorted(
-        (d for d in root_dir.iterdir() if d.is_dir()),
-        key=_extract_id,
-    )
-
-    for rank_dir in rank_dirs:
-        id_dirs = sorted(
-            (d for d in rank_dir.iterdir() if d.is_dir() and _is_lerobot_dataset(d)),
-            key=_extract_id,
-        )
-        cutoff = len(id_dirs) - skip_last_n
-        safe.extend(id_dirs[:cutoff])
-
-    return safe
-
 
 def _delta_offsets_for_sub_dataset(sub_ds: Any) -> list[int]:
     if getattr(sub_ds, "delta_indices", None) is None:
@@ -505,7 +394,6 @@ class RollingLeRobotDataset(Dataset):
     def __init__(
         self,
         root_dir: str | Path,
-        skip_last_n: int = 1,
         chunk_size: int = 1,
         delta_timestamps: dict[str, list[float]] | None = None,
         keys: list[str] | None = None,
@@ -513,19 +401,11 @@ class RollingLeRobotDataset(Dataset):
         min_frames: int = 10,
         wait_interval_s: float = 10.0,
         action_sequence_keys: list[str] | None = ["actions"],
-        # cache
-        enable_decoded_cache: bool = False,
-        decoded_cache_capacity: int = 8192,
-        cache_ingest_mode: CacheIngestMode = "new_shards",
-        cache_last_n_frames: int = 10_000,
-        cache_ingest_max_frames: int | None = None,
         # check intervene
         require_all_intervene: bool = False,
         intervene_flag_key: str = "intervene_flag",
         window_size: int | None = None,
         index_load_workers: int = 1,
-        cache_ingest_rank: int = 0,
-        cache_ingest_world_size: int = 1,
         in_memory_mode: bool = False,
         fps: int = 10,
     ) -> None:
@@ -536,7 +416,6 @@ class RollingLeRobotDataset(Dataset):
             )
 
         self.root_dir = Path(root_dir)
-        self.skip_last_n = skip_last_n
         self.chunk_size = chunk_size
         self._user_delta_timestamps = delta_timestamps
         self.keys = keys
@@ -544,15 +423,10 @@ class RollingLeRobotDataset(Dataset):
         self.min_frames = min_frames
         self.wait_interval_s = wait_interval_s
         self.action_sequence_keys = action_sequence_keys
-        self.cache_ingest_mode: CacheIngestMode = cache_ingest_mode
-        self.cache_last_n_frames = int(cache_last_n_frames)
-        self.cache_ingest_max_frames = cache_ingest_max_frames
         self.require_all_intervene = bool(require_all_intervene)
         self.intervene_flag_key = intervene_flag_key
         self.window_size = window_size
         self._index_load_workers = max(1, int(index_load_workers))
-        self._cache_ingest_rank = int(cache_ingest_rank)
-        self._cache_ingest_world_size = max(1, int(cache_ingest_world_size))
         self._window_physical_start: int = 0
         self._window_valid_slice_lo: int = 0
         self._valid_physical_indices: list[int] | None = None
@@ -560,12 +434,6 @@ class RollingLeRobotDataset(Dataset):
         if self.require_all_intervene:
             self._valid_physical_indices = []
             self._valid_physical_set = set()
-        if enable_decoded_cache:
-            logger.warning(
-                "[RollingLeRobotDataset] enable_decoded_cache=True ignored; "
-                "in-memory episodes are the training source of truth."
-            )
-        self._decoded_cache: DecodedTensorFifoCache | None = None
         # Serializes in-memory index growth vs __getitem__/__getitems__.
         self._rolling_access_lock = threading.RLock()
 
@@ -799,81 +667,6 @@ class RollingLeRobotDataset(Dataset):
             "Training does not fall back to archived disk shards."
         )
 
-    def _ingest_physical_indices_sharded(
-        self,
-        physical_indices: list[int],
-        reuse_open_by_path: dict[Path, Any] | None,
-    ) -> None:
-        cache = self._decoded_cache
-        if cache is None or not physical_indices:
-            return
-        by_shard: dict[int, list[int]] = {}
-        for g in physical_indices:
-            ds_idx = bisect.bisect_right(self._cumulative_lengths, g) - 1
-            by_shard.setdefault(ds_idx, []).append(int(g))
-        try:
-            for ds_idx in sorted(by_shard.keys()):
-                idxs = sorted(by_shard[ds_idx])
-                path = self._sub_datasets[ds_idx]
-                base = self._cumulative_lengths[ds_idx]
-                reused = (
-                    reuse_open_by_path is not None
-                    and path in reuse_open_by_path
-                    and reuse_open_by_path[path] is not None
-                )
-                if reused:
-                    lerobot_ds = reuse_open_by_path[path]
-                else:
-                    lerobot_ds = self._ensure_lerobot_open(ds_idx)
-                for gidx in idxs:
-                    try:
-                        local_idx = gidx - base
-                        item = self._load_item_from_open_lerobot(lerobot_ds, local_idx)
-                        cache.put(gidx, item)
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning(
-                            "[RollingLeRobotDataset] cache ingest failed at idx=%s: %s",
-                            gidx,
-                            exc,
-                        )
-        finally:
-            self._lerobot_open = None
-            self._lerobot_open_idx = None
-
-    def _ingest_decoded_cache(
-        self,
-        physical_before: int,
-        physical_after: int,
-        n_new: int,
-        reuse_open_by_path: dict[Path, Any] | None = None,
-    ) -> None:
-        cache = self._decoded_cache
-        if cache is None:
-            return
-        indices: list[int] = []
-        mode = self.cache_ingest_mode
-        if mode in ("new_shards", "both") and n_new > 0:
-            indices.extend(range(int(physical_before), int(physical_after)))
-        if mode in ("last_n", "both"):
-            n_phys = self._num_physical_frames()
-            tail = self.cache_last_n_frames
-            start = max(0, n_phys - tail)
-            indices.extend(range(start, n_phys))
-        seen: set[int] = set()
-        uniq: list[int] = []
-        for i in indices:
-            if i not in seen:
-                seen.add(i)
-                uniq.append(i)
-        if self._valid_physical_set is not None:
-            uniq = [i for i in uniq if i in self._valid_physical_set]
-        if self._cache_ingest_world_size > 1:
-            uniq = uniq[self._cache_ingest_rank :: self._cache_ingest_world_size]
-        lim = self.cache_ingest_max_frames
-        if lim is not None:
-            uniq = uniq[: int(lim)]
-        self._ingest_physical_indices_sharded(uniq, reuse_open_by_path)
-
     # ------------------------------------------------------------------
     # Shard cache API
     # ------------------------------------------------------------------
@@ -1011,8 +804,6 @@ class RollingLeRobotDataset(Dataset):
             "shard_cache_hits": self._shard_cache_hits,
             "shard_cache_misses": self._shard_cache_misses,
         }
-        if self._decoded_cache is not None:
-            stats.update(self._decoded_cache.stats())
         return stats
 
     def __len__(self) -> int:
@@ -1025,25 +816,9 @@ class RollingLeRobotDataset(Dataset):
             return max(0, n - self._window_physical_start)
         return n
 
-    def get_cache_aligned_logical_indices(self) -> list[int] | None:
-        if self._decoded_cache is None or self._cache_ingest_world_size <= 1:
-            return None
-        cached = self._decoded_cache.cached_indices()
-        if not cached:
-            return None
-        n = len(self)
-        aligned = [l for l in range(n) if self._logical_to_physical(l) in cached]
-        return aligned if aligned else None
-
     def __getitem__(self, idx: int) -> dict[str, Any]:
         with self._rolling_access_lock:
             physical = self._logical_to_physical(int(idx))
-            cache = self._decoded_cache
-            if cache is not None:
-                hit = cache.try_get(physical)
-                if hit is not None:
-                    return hit
-                cache.notify_miss()
             return self._load_item_from_lerobot(physical)
 
     def __getitems__(self, indices: Sequence[int]) -> list[dict[str, Any]]:
@@ -1052,18 +827,7 @@ class RollingLeRobotDataset(Dataset):
             return []
         with self._rolling_access_lock:
             physicals = [self._logical_to_physical(int(i)) for i in indices]
-            cache = self._decoded_cache
-            if cache is None:
-                return [self._load_item_from_lerobot(p) for p in physicals]
-            out: list[dict[str, Any]] = []
-            for physical in physicals:
-                hit = cache.try_get(physical)
-                if hit is not None:
-                    out.append(hit)
-                else:
-                    cache.notify_miss()
-                    out.append(self._load_item_from_lerobot(physical))
-            return out
+            return [self._load_item_from_lerobot(p) for p in physicals]
 
 
 # ---------------------------------------------------------------------------
@@ -1119,16 +883,9 @@ class PreloadRollingLeRobotDataset:
     # ------------------------------------------------------------------
 
     def _build_loader(self) -> DataLoader:
-        """Build a fresh DataLoader using the cached construction kwargs.
-
-        Recomputes cache-aligned indices from the dataset's current cache
-        state so that each rebuilt loader (after a refresh) only draws from
-        logical indices backed by this rank's decoded cache shard.
-        """
-        aligned = self.dataset.get_cache_aligned_logical_indices()
+        """Build a fresh DataLoader using the cached construction kwargs."""
         return build_dataloader_from_dataset(
             dataset=self.dataset,
-            cache_aligned_indices=aligned,
             **self._dl_kwargs,
         )
 
@@ -1248,7 +1005,6 @@ class PreloadRollingLeRobotDataset:
 
 def build_rolling_lerobot_dataset(
     root_dir: str | Path,
-    skip_last_n: int = 1,
     chunk_size: int = 1,
     delta_timestamps: dict[str, list[float]] | None = None,
     keys: list[str] | None = None,
@@ -1256,23 +1012,15 @@ def build_rolling_lerobot_dataset(
     min_frames: int = 1,
     wait_interval_s: float = 10.0,
     action_sequence_keys: list[str] | None = ["actions"],
-    enable_decoded_cache: bool = False,
-    decoded_cache_capacity: int = 8192,
-    cache_ingest_mode: CacheIngestMode = "new_shards",
-    cache_last_n_frames: int = 10_000,
-    cache_ingest_max_frames: int | None = None,
     require_all_intervene: bool = False,
     intervene_flag_key: str = "intervene_flag",
     window_size: int | None = None,
     index_load_workers: int = 1,
-    cache_ingest_rank: int = 0,
-    cache_ingest_world_size: int = 1,
     in_memory_mode: bool = False,
     fps: int = 10,
 ) -> RollingLeRobotDataset:
     dataset = RollingLeRobotDataset(
         root_dir=root_dir,
-        skip_last_n=skip_last_n,
         chunk_size=chunk_size,
         delta_timestamps=delta_timestamps,
         keys=keys,
@@ -1280,33 +1028,23 @@ def build_rolling_lerobot_dataset(
         min_frames=min_frames,
         wait_interval_s=wait_interval_s,
         action_sequence_keys=action_sequence_keys,
-        enable_decoded_cache=enable_decoded_cache,
-        decoded_cache_capacity=decoded_cache_capacity,
-        cache_ingest_mode=cache_ingest_mode,
-        cache_last_n_frames=cache_last_n_frames,
-        cache_ingest_max_frames=cache_ingest_max_frames,
         require_all_intervene=require_all_intervene,
         intervene_flag_key=intervene_flag_key,
         window_size=window_size,
         index_load_workers=index_load_workers,
-        cache_ingest_rank=cache_ingest_rank,
-        cache_ingest_world_size=cache_ingest_world_size,
         in_memory_mode=in_memory_mode,
         fps=fps,
     )
 
     logger.info(
         "[build_rolling_lerobot_dataset] root_dir=%s, chunk_size=%d, "
-        "skip_last_n=%d, sub_datasets=%d, logical_samples=%d, "
-        "physical_frames=%d, decoded_cache=%s, require_all_intervene=%s, "
-        "window_size=%s",
+        "sub_datasets=%d, logical_samples=%d, "
+        "physical_frames=%d, require_all_intervene=%s, window_size=%s",
         root_dir,
         chunk_size,
-        skip_last_n,
         len(dataset._sub_datasets),
         len(dataset),
         dataset._num_physical_frames(),
-        dataset._decoded_cache is not None,
         require_all_intervene,
         window_size,
     )

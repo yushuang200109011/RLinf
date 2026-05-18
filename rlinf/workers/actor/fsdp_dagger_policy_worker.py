@@ -55,13 +55,6 @@ class EmbodiedDAGGERFSDPPolicy(EmbodiedFSDPActor):
         self._pending_archive_episodes: list[list[dict]] = []
 
     def _build_lerobot_dataset(self):
-        enable_cache = bool(self.cfg.actor.get("enable_decoded_cache", False))
-        if enable_cache:
-            self._logger.warning(
-                "actor.enable_decoded_cache=True ignored for online LeRobot "
-                "DAgger; received episodes are sampled directly from memory."
-            )
-            enable_cache = False
         lerobot_num_workers = self.cfg.actor.get("lerobot_num_workers")
         if lerobot_num_workers is None:
             lerobot_num_workers = 0
@@ -83,24 +76,16 @@ class EmbodiedDAGGERFSDPPolicy(EmbodiedFSDPActor):
             chunk_size=self.cfg.actor.model.num_action_chunks,
             min_frames=self.cfg.actor.get("min_frames", 1),
             wait_interval_s=self.cfg.actor.get("wait_interval_s", 10.0),
-            enable_decoded_cache=enable_cache,
-            decoded_cache_capacity=self.cfg.actor.get("decoded_cache_capacity", 8192),
-            cache_ingest_mode=self.cfg.actor.get("cache_ingest_mode", "new_shards"),
-            cache_last_n_frames=self.cfg.actor.get("cache_last_n_frames", 10_000),
-            cache_ingest_max_frames=self.cfg.actor.get("cache_ingest_max_frames", None),
             require_all_intervene=self.cfg.algorithm.dagger.get(
                 "only_save_expert", False
             ),
             window_size=self.cfg.actor.get("rolling_lerobot_window_size", None),
             index_load_workers=self.cfg.actor.get("rolling_lerobot_index_workers", 4),
-            cache_ingest_rank=self._rank,
-            cache_ingest_world_size=self._world_size,
             in_memory_mode=in_memory_mode,
             fps=lerobot_fps,
         )
 
     def _build_lerobot_data_loader(self):
-        aligned = self.dataset.get_cache_aligned_logical_indices()
         self.data_loader = build_dataloader_from_dataset(
             dataset=self.dataset,
             batch_size=self.cfg.actor.micro_batch_size,
@@ -110,7 +95,6 @@ class EmbodiedDAGGERFSDPPolicy(EmbodiedFSDPActor):
             num_samples_per_epoch=self.cfg.actor.global_batch_size,
             seed=self.cfg.actor.get("seed", 42),
             num_workers=self._lerobot_num_workers,
-            cache_aligned_indices=aligned,
         )
         if hasattr(self.data_loader.sampler, "set_epoch"):
             self.data_loader.sampler.set_epoch(self._data_epoch)

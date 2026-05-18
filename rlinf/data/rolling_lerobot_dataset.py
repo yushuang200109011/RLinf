@@ -529,6 +529,12 @@ class RollingLeRobotDataset(Dataset):
         in_memory_mode: bool = False,
         fps: int = 10,
     ) -> None:
+        if not in_memory_mode:
+            raise ValueError(
+                "RollingLeRobotDataset now supports only in_memory_mode=True. "
+                "Archived LeRobot shards are not used for training."
+            )
+
         self.root_dir = Path(root_dir)
         self.skip_last_n = skip_last_n
         self.chunk_size = chunk_size
@@ -554,16 +560,19 @@ class RollingLeRobotDataset(Dataset):
         if self.require_all_intervene:
             self._valid_physical_indices = []
             self._valid_physical_set = set()
-        self._decoded_cache: DecodedTensorFifoCache | None = None
         if enable_decoded_cache:
-            self._decoded_cache = DecodedTensorFifoCache(decoded_cache_capacity)
-        # Serializes refresh (index growth + cache ingest) vs __getitem__/__getitems__.
+            logger.warning(
+                "[RollingLeRobotDataset] enable_decoded_cache=True ignored; "
+                "in-memory episodes are the training source of truth."
+            )
+        self._decoded_cache: DecodedTensorFifoCache | None = None
+        # Serializes in-memory index growth vs __getitem__/__getitems__.
         self._rolling_access_lock = threading.RLock()
 
         # Sub-dataset **roots** indexed so far (paths only; no live LeRobot handles).
         self._indexed_datasets: set[Path] = set()
         self._sub_datasets: list[Path] = []
-        # At most one open LeRobotDataset — reopened when ``__getitem__`` crosses shards.
+        # Legacy disk handles are unused by the in-memory training path.
         self._lerobot_open: Any | None = None
         self._lerobot_open_idx: int | None = None
 
@@ -574,19 +583,13 @@ class RollingLeRobotDataset(Dataset):
         # Running total of episodes across all loaded sub-datasets.
         self._total_episodes: int = 0
 
-        self._shard_cache_enabled: bool = bool(in_memory_mode)
+        self._shard_cache_enabled: bool = True
         self._in_memory_shards: dict[Path, InMemoryArrowStore] = {}
         self._shard_cache_chunk_size: int = chunk_size
         self._shard_cache_fps: int = max(1, int(fps))
         self._shard_cache_action_keys: list[str] = list(action_sequence_keys or [])
         self._shard_cache_hits: int = 0
         self._shard_cache_misses: int = 0
-        self._build_index(_discover_safe_datasets(self.root_dir, self.skip_last_n))
-        if self._decoded_cache is not None and self.cache_ingest_mode in (
-            "last_n",
-            "both",
-        ):
-            self._ingest_decoded_cache(0, 0, 0)
 
     # ------------------------------------------------------------------
     # Readiness gate
@@ -782,18 +785,19 @@ class RollingLeRobotDataset(Dataset):
     def _load_item_from_lerobot(self, idx: int) -> dict[str, Any]:
         ds_idx = bisect.bisect_right(self._cumulative_lengths, idx) - 1
         local_idx = idx - self._cumulative_lengths[ds_idx]
-        if self._shard_cache_enabled:
-            path = self._sub_datasets[ds_idx]
-            store = self._in_memory_shards.get(path)
-            if store is not None:
-                self._shard_cache_hits += 1
-                item = store[local_idx]
-                if self.keys is not None:
-                    item = {k: v for k, v in item.items() if k in self.keys}
-                return item
-            self._shard_cache_misses += 1
-        lerobot_ds = self._ensure_lerobot_open(ds_idx)
-        return self._load_item_from_open_lerobot(lerobot_ds, local_idx)
+        path = self._sub_datasets[ds_idx]
+        store = self._in_memory_shards.get(path)
+        if store is not None:
+            self._shard_cache_hits += 1
+            item = store[local_idx]
+            if self.keys is not None:
+                item = {k: v for k, v in item.items() if k in self.keys}
+            return item
+        self._shard_cache_misses += 1
+        raise RuntimeError(
+            f"Indexed in-memory LeRobot shard is missing: {path}. "
+            "Training does not fall back to archived disk shards."
+        )
 
     def _ingest_physical_indices_sharded(
         self,
@@ -874,20 +878,78 @@ class RollingLeRobotDataset(Dataset):
     # Shard cache API
     # ------------------------------------------------------------------
 
-    def add_shard_to_memory(self, path: str | Path, episodes: list[list[dict]]) -> None:
-        if not self._shard_cache_enabled or not episodes:
-            return
-        store = InMemoryArrowStore(
+    def _new_in_memory_store(self) -> InMemoryArrowStore:
+        return InMemoryArrowStore(
             chunk_size=self._shard_cache_chunk_size,
             action_sequence_keys=self._shard_cache_action_keys,
             fps=self._shard_cache_fps,
             image_transforms=self.image_transforms,
         )
-        for ep_frames in episodes:
-            if ep_frames:
-                store.add_episode(ep_frames)
+
+    def append_episode_to_memory(self, path: str | Path, ep_frames: list[dict]) -> None:
+        if not ep_frames:
+            return
         path = Path(path)
         with self._rolling_access_lock:
+            if path in self._in_memory_shards:
+                ds_idx = self._sub_datasets.index(path)
+                if ds_idx != len(self._sub_datasets) - 1:
+                    raise ValueError(
+                        "Can only append to the latest in-memory LeRobot shard."
+                    )
+                store = self._in_memory_shards[path]
+                physical_base = self._cumulative_lengths[ds_idx]
+            else:
+                store = self._new_in_memory_store()
+                self._in_memory_shards[path] = store
+                self._indexed_datasets.add(path)
+                self._sub_datasets.append(path)
+                physical_base = self._cumulative_lengths[-1]
+                self._cumulative_lengths.append(physical_base)
+
+            old_len = len(store)
+            store.add_episode(ep_frames)
+            added_frames = len(store) - old_len
+            if added_frames <= 0:
+                return
+
+            self._cumulative_lengths[-1] += added_frames
+            self._total_episodes += 1
+            if self.require_all_intervene and self._valid_physical_indices is not None:
+                assert self._valid_physical_set is not None
+                valid_locals = _compute_intervene_valid_local_indices_in_memory(
+                    store,
+                    self.intervene_flag_key,
+                    self.chunk_size,
+                )
+                for local_i in valid_locals:
+                    if local_i < old_len:
+                        continue
+                    gidx = physical_base + int(local_i)
+                    self._valid_physical_indices.append(gidx)
+                    self._valid_physical_set.add(gidx)
+
+            self._update_window_sampling_bounds()
+            self._evict_stale_shards()
+            logger.debug(
+                "[RollingLeRobotDataset] episode appended: %s "
+                "(+%d frames, physical_frames=%d, logical_samples=%d)",
+                path.name,
+                added_frames,
+                self._num_physical_frames(),
+                len(self),
+            )
+
+    def add_shard_to_memory(self, path: str | Path, episodes: list[list[dict]]) -> None:
+        if not episodes:
+            return
+        path = Path(path)
+        for ep_frames in episodes:
+            self.append_episode_to_memory(path, ep_frames)
+        with self._rolling_access_lock:
+            store = self._in_memory_shards.get(path)
+            if store is None:
+                return
             self._in_memory_shards[path] = store
             logger.debug(
                 "[RollingLeRobotDataset] shard cached: %s (%d episodes, %d frames)",
@@ -919,56 +981,13 @@ class RollingLeRobotDataset(Dataset):
     # ------------------------------------------------------------------
 
     def _refresh_impl(self, new_paths: list[Path]) -> int:
-        if not new_paths:
-            return 0
-        physical_before = self._num_physical_frames()
-        n_new = 0
-        reuse_handles: dict[Path, Any] = {}
-        with self._rolling_access_lock:
-            try:
-                n_new = self._build_index(
-                    new_paths,
-                    out_open_handles=(
-                        reuse_handles if self._decoded_cache is not None else None
-                    ),
-                )
-                physical_after = self._num_physical_frames()
-                if n_new > 0:
-                    logger.info(
-                        "[RollingLeRobotDataset] refresh: +%d sub-dataset(s), "
-                        "physical_frames=%d total_logical=%d "
-                        "windowed_logical=%d",
-                        n_new,
-                        physical_after,
-                        self._total_logical_samples(),
-                        len(self),
-                    )
-                self._evict_stale_shards()
-                if self._decoded_cache is not None:
-                    self._ingest_decoded_cache(
-                        physical_before,
-                        physical_after,
-                        n_new,
-                        reuse_open_by_path=reuse_handles or None,
-                    )
-            finally:
-                reuse_handles.clear()
-                if self._decoded_cache is not None:
-                    self._lerobot_open = None
-                    self._lerobot_open_idx = None
-        return n_new
+        return 0
 
     def refresh(self) -> int:
-        safe = _discover_safe_datasets(self.root_dir, self.skip_last_n)
-        new_paths = [p for p in safe if p not in self._indexed_datasets]
-        return self._refresh_impl(new_paths)
+        return 0
 
     def refresh_one(self) -> int:
-        safe = _discover_safe_datasets(self.root_dir, self.skip_last_n)
-        new_paths = [p for p in safe if p not in self._indexed_datasets]
-        if not new_paths:
-            return 0
-        return self._refresh_impl(new_paths[:1])
+        return 0
 
     def _total_logical_samples(self) -> int:
         """Total logical samples across all shards, ignoring ``window_size``."""
@@ -1287,7 +1306,7 @@ def build_rolling_lerobot_dataset(
         len(dataset._sub_datasets),
         len(dataset),
         dataset._num_physical_frames(),
-        enable_decoded_cache,
+        dataset._decoded_cache is not None,
         require_all_intervene,
         window_size,
     )

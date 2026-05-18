@@ -49,29 +49,34 @@ class EmbodiedDAGGERFSDPPolicy(EmbodiedFSDPActor):
         self._lerobot_iter = None
         self.data_source = cfg.actor.get("data_source", "buffer")
         self._data_epoch = 0
-        # Actor-side LeRobot writer state (used when data_collection.defer_write=True)
-        self._lerobot_writer = None
-        self._lerobot_episodes_written = 0
-        # Shard-cache tracking: accumulate episodes belonging to the current
-        # open shard so they can be passed to add_shard_to_memory at finalize.
-        self._current_shard_path: str | None = None
-        self._current_shard_episodes: list[list[dict]] = []
+        # Actor-side LeRobot archive state (used when data_collection.defer_write=True).
+        self._lerobot_episodes_received = 0
+        self._pending_archive_path: str | None = None
+        self._pending_archive_episodes: list[list[dict]] = []
 
     def _build_lerobot_dataset(self):
-        enable_cache = self.cfg.actor.get("enable_decoded_cache", False)
+        enable_cache = bool(self.cfg.actor.get("enable_decoded_cache", False))
+        if enable_cache:
+            self._logger.warning(
+                "actor.enable_decoded_cache=True ignored for online LeRobot "
+                "DAgger; received episodes are sampled directly from memory."
+            )
+            enable_cache = False
         lerobot_num_workers = self.cfg.actor.get("lerobot_num_workers")
         if lerobot_num_workers is None:
-            lerobot_num_workers = 0 if enable_cache else 4
-        elif enable_cache and int(lerobot_num_workers) != 0:
-            self._logger.warning(
-                "enable_decoded_cache=True but lerobot_num_workers=%s; forked "
-                "DataLoader workers do not share the in-process decoded cache. "
-                "Prefer lerobot_num_workers=0.",
-                lerobot_num_workers,
+            lerobot_num_workers = 0
+        elif int(lerobot_num_workers) != 0:
+            raise ValueError(
+                "Online LeRobot DAgger requires actor.lerobot_num_workers=0 "
+                "so DataLoader reads the live in-process memory dataset."
             )
         self._lerobot_num_workers = int(lerobot_num_workers)
         lerobot_cfg = self.cfg.actor.get("lerobot", {})
         in_memory_mode = bool(lerobot_cfg.get("in_memory_mode", False))
+        if not in_memory_mode:
+            raise ValueError(
+                "Online LeRobot DAgger requires actor.lerobot.in_memory_mode=True."
+            )
         lerobot_fps = int(lerobot_cfg.get("fps", 10))
         self.dataset = build_rolling_lerobot_dataset(
             root_dir=self.cfg.actor.sft_data_path,
@@ -181,8 +186,6 @@ class EmbodiedDAGGERFSDPPolicy(EmbodiedFSDPActor):
             )
         elif self.data_source == "lerobot":
             self._build_lerobot_dataset()
-            if self.cfg.actor.get("enable_preload", False):
-                self._build_lerobot_preload_dataset()
 
     async def recv_rollout_trajectories(self, input_channel: Channel) -> None:
         clear_memory(sync=False)
@@ -213,15 +216,29 @@ class EmbodiedDAGGERFSDPPolicy(EmbodiedFSDPActor):
             self.replay_buffer.add_trajectories(intervene_traj_list)
 
     def recv_lerobot_rollout_trajectories(self, input_channel: Channel) -> None:
-        """Receive episodes from EnvWorker via channel, write to disk, then refresh.
+        """Receive episodes from EnvWorker and append them to the memory dataset.
 
         When ``data_collection.defer_write=True``, EnvWorkers buffer completed
         episodes in memory and send them here instead of writing directly to
-        disk. The actor writes each received episode to ``actor.sft_data_path``
-        and then calls ``refresh()`` on the rolling dataset so new shards are
-        picked up for training.
+        disk. The actor indexes each received episode in memory immediately.
+        Archive shards are written separately every
+        ``actor.lerobot.finalize_interval`` episodes.
         """
 
+        received_once = False
+        while True:
+            if input_channel is not None and (
+                not received_once or not self.dataset.is_ready()
+            ):
+                self._receive_lerobot_episode_batch(input_channel)
+                received_once = True
+            if self.dataset.is_ready():
+                break
+            time.sleep(1)
+            self.log_info("waiting for lerobot dataset to be ready")
+        self._ensure_lerobot_loader()
+
+    def _receive_lerobot_episode_batch(self, input_channel: Channel) -> None:
         if input_channel is not None:
             send_num = self._component_placement.get_world_size("env") * self.stage_num
             recv_num = self._component_placement.get_world_size("actor")
@@ -230,18 +247,7 @@ class EmbodiedDAGGERFSDPPolicy(EmbodiedFSDPActor):
                 episodes: list[list[dict]] = input_channel.get()
                 for ep_frames in episodes:
                     if ep_frames:
-                        self._write_lerobot_episode_to_disk(ep_frames)
-
-        refresher = (
-            self.preload_dataset if self.preload_dataset is not None else self.dataset
-        )
-        refresher.refresh()
-        while not self.dataset.is_ready():
-            time.sleep(1)
-            self.log_info("waiting for lerobot dataset to be ready")
-            refresher.refresh()
-        if self.preload_dataset is None:
-            self._build_lerobot_data_loader()
+                        self._append_lerobot_episode(ep_frames)
 
     @staticmethod
     def _collect_lerobot_image_keys(
@@ -256,19 +262,29 @@ class EmbodiedDAGGERFSDPPolicy(EmbodiedFSDPActor):
             and frame[k].ndim == 3
         }
 
-    @Worker.timer("write_lerobot_episode_to_disk")
-    def _write_lerobot_episode_to_disk(self, ep_frames: list[dict]) -> None:
-        """Write a single episode to disk using the actor-side LeRobot writer.
+    def _ensure_lerobot_loader(self) -> None:
+        if self._lerobot_loader is not None:
+            return
+        if self.cfg.actor.get("enable_preload", False):
+            self._build_lerobot_preload_dataset()
+        else:
+            self._build_lerobot_data_loader()
 
-        The writer is created lazily on the first episode using metadata from
-        the first frame. After every ``actor.lerobot.finalize_interval`` episodes
-        the writer is finalised and a new shard is opened, matching the behaviour
-        of ``CollectEpisode`` on the env side.
+    def _current_archive_path(self) -> str:
+        if self._pending_archive_path is None:
+            self._pending_archive_path = os.path.join(
+                self.cfg.actor.sft_data_path,
+                f"rank_{self._rank}",
+                f"id_{self._lerobot_episodes_received}",
+            )
+        return self._pending_archive_path
 
-        When ``in_memory_mode=True``, episodes are accumulated per shard and
-        :meth:`~rlinf.data.rolling_lerobot_dataset.RollingLeRobotDataset.add_shard_to_memory`
-        is called at finalize time, so the shard is available in RAM before
-        the next :meth:`refresh` indexes it from disk.
+    @Worker.timer("append_lerobot_episode")
+    def _append_lerobot_episode(self, ep_frames: list[dict]) -> None:
+        """Append one received episode to memory and queue it for archive output.
+
+        The memory append is the training path. The pending archive buffer is
+        flushed to disk every ``actor.lerobot.finalize_interval`` episodes.
 
         Args:
             ep_frames: List of per-step frame dicts as produced by
@@ -277,65 +293,51 @@ class EmbodiedDAGGERFSDPPolicy(EmbodiedFSDPActor):
         if not ep_frames:
             return
 
-        from rlinf.data.lerobot_writer import LeRobotDatasetWriter
-
-        if self._lerobot_writer is None:
-            self._lerobot_writer = LeRobotDatasetWriter()
-
-        if self._lerobot_writer.dataset is None:
-            first = ep_frames[0]
-            wrist_image_keys = self._collect_lerobot_image_keys(first, "wrist_image")
-            extra_view_image_keys = self._collect_lerobot_image_keys(
-                first, "extra_view_image"
-            )
-            lerobot_cfg = self.cfg.actor.get("lerobot", {})
-            robot_type = lerobot_cfg.get("robot_type", "panda")
-            fps = lerobot_cfg.get("fps", 10)
-            shard_repo_id = os.path.join(
-                self.cfg.actor.sft_data_path,
-                f"rank_{self._rank}",
-                f"id_{self._lerobot_episodes_written}",
-            )
-            self._lerobot_writer.create(
-                repo_id=shard_repo_id,
-                robot_type=robot_type,
-                fps=fps,
-                image_shape=first["image"].shape if "image" in first else None,
-                state_dim=int(first["state"].shape[-1]),
-                action_dim=int(first["actions"].shape[-1]),
-                has_image="image" in first,
-                wrist_image_keys=wrist_image_keys,
-                extra_view_image_keys=extra_view_image_keys,
-                has_intervene_flag="intervene_flag" in first,
-            )
-            self._current_shard_path = shard_repo_id
-            self._current_shard_episodes = []
-
-        self._lerobot_writer.add_episode(ep_frames)
-        self._current_shard_episodes.append(ep_frames)
-        self._lerobot_episodes_written += 1
+        archive_path = self._current_archive_path()
+        self.dataset.append_episode_to_memory(archive_path, ep_frames)
+        self._pending_archive_episodes.append(ep_frames)
+        self._lerobot_episodes_received += 1
 
         finalize_interval = self.cfg.actor.get("lerobot", {}).get(
             "finalize_interval", 8
         )
         if (
             finalize_interval > 0
-            and self._lerobot_episodes_written % finalize_interval == 0
+            and len(self._pending_archive_episodes) >= int(finalize_interval)
         ):
-            self._lerobot_writer.finalize()
-            # Populate the shard cache BEFORE refresh() so the next __getitem__
-            # call can serve frames from RAM without a disk round-trip.
-            if (
-                self._current_shard_path is not None
-                and self._current_shard_episodes
-                and self.dataset is not None
-            ):
-                self.dataset.add_shard_to_memory(
-                    self._current_shard_path, self._current_shard_episodes
-                )
-            self._current_shard_path = None
-            self._current_shard_episodes = []
-            # dataset is now None; next episode will open a new shard.
+            self._archive_pending_lerobot_episodes()
+
+    @Worker.timer("archive_lerobot_episodes")
+    def _archive_pending_lerobot_episodes(self) -> None:
+        if not self._pending_archive_episodes or self._pending_archive_path is None:
+            return
+
+        from rlinf.data.lerobot_writer import LeRobotDatasetWriter
+
+        writer = LeRobotDatasetWriter()
+        first = self._pending_archive_episodes[0][0]
+        wrist_image_keys = self._collect_lerobot_image_keys(first, "wrist_image")
+        extra_view_image_keys = self._collect_lerobot_image_keys(
+            first, "extra_view_image"
+        )
+        lerobot_cfg = self.cfg.actor.get("lerobot", {})
+        writer.create(
+            repo_id=self._pending_archive_path,
+            robot_type=lerobot_cfg.get("robot_type", "panda"),
+            fps=lerobot_cfg.get("fps", 10),
+            image_shape=first["image"].shape if "image" in first else None,
+            state_dim=int(first["state"].shape[-1]),
+            action_dim=int(first["actions"].shape[-1]),
+            has_image="image" in first,
+            wrist_image_keys=wrist_image_keys,
+            extra_view_image_keys=extra_view_image_keys,
+            has_intervene_flag="intervene_flag" in first,
+        )
+        for ep_frames in self._pending_archive_episodes:
+            writer.add_episode(ep_frames)
+        writer.finalize()
+        self._pending_archive_path = None
+        self._pending_archive_episodes = []
 
     def _prepare_sft_batch(self, batch):
         """Prepare model-specific DAgger training inputs."""

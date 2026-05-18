@@ -54,15 +54,12 @@ class AsyncEmbodiedDAGGERFSDPPolicy(EmbodiedDAGGERFSDPPolicy):
             self._recv_rollout_thread.start()
 
     def _recv_lerobot_thread_main(self, input_channel):
-        """Background thread: receive episode batches from EnvWorker and write to disk.
+        """Background thread: receive episode batches from EnvWorker.
 
-        When ``in_memory_mode=True``, each shard is also populated into the
-        dataset's in-memory shard cache via
-        :meth:`~rlinf.workers.actor.fsdp_dagger_policy_worker.EmbodiedDAGGERFSDPPolicy._write_lerobot_episode_to_disk`,
-        which calls
-        :meth:`~rlinf.data.rolling_lerobot_dataset.RollingLeRobotDataset.add_shard_to_memory`
-        at finalize time so the polling loop in
-        :meth:`_wait_for_lerobot_dataset_ready` picks up new shards from RAM.
+        Each received episode is appended to the actor's live in-memory
+        LeRobot dataset immediately. Archive writes are flushed separately by
+        ``actor.lerobot.finalize_interval`` and are not part of training
+        readiness.
         """
         send_num = self._component_placement.get_world_size("env") * self.stage_num
         recv_num = self._component_placement.get_world_size("actor")
@@ -72,7 +69,7 @@ class AsyncEmbodiedDAGGERFSDPPolicy(EmbodiedDAGGERFSDPPolicy):
                 episodes: list[list[dict]] = input_channel.get()
                 for ep_frames in episodes:
                     if ep_frames:
-                        self._write_lerobot_episode_to_disk(ep_frames)
+                        self._append_lerobot_episode(ep_frames)
 
     def _recv_rollout_thread_main(self, input_channel):
         send_num = self._component_placement.get_world_size("env") * self.stage_num
@@ -118,14 +115,9 @@ class AsyncEmbodiedDAGGERFSDPPolicy(EmbodiedDAGGERFSDPPolicy):
             await asyncio.sleep(1)
 
     async def _wait_for_lerobot_dataset_ready(self):
-        refresher = (
-            self.preload_dataset if self.preload_dataset is not None else self.dataset
-        )
         while True:
-            refresher.refresh_one()
             if self.dataset.is_ready():
-                if self.preload_dataset is None:
-                    self._build_lerobot_data_loader()
+                self._ensure_lerobot_loader()
                 return
             await asyncio.sleep(1)
 

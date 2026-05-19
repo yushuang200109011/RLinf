@@ -15,14 +15,11 @@
 from __future__ import annotations
 
 import bisect
-import json
 import queue
 import threading
 import time
 from collections import deque
 from collections.abc import Sequence
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
@@ -38,13 +35,6 @@ logger = get_logger()
 _META_KEYS: frozenset[str] = frozenset(
     {"timestamp", "frame_index", "episode_index", "index", "task_index"}
 )
-
-def _delta_offsets_for_sub_dataset(sub_ds: Any) -> list[int]:
-    if getattr(sub_ds, "delta_indices", None) is None:
-        return [0]
-    first_key = next(iter(sub_ds.delta_indices))
-    return [int(x) for x in sub_ds.delta_indices[first_key]]
-
 
 def _hf_column_to_numpy_bool_1d(hf_dataset: Any, col: str) -> np.ndarray:
     raw = hf_dataset[col]
@@ -62,69 +52,6 @@ def _hf_column_to_numpy_int64_1d(hf_dataset: Any, col: str) -> np.ndarray:
     else:
         t = torch.stack(list(raw))
     return t.reshape(-1).to(torch.int64).numpy()
-
-
-def _compute_intervene_valid_local_indices(
-    sub_ds: Any,
-    intervene_flag_key: str,
-) -> list[int]:
-    hf = sub_ds.hf_dataset
-    n = len(hf)
-    if n == 0:
-        return []
-
-    if intervene_flag_key not in hf.column_names:
-        logger.warning(
-            "[RollingLeRobotDataset] require_all_intervene=True but column %r "
-            "missing in %s; keeping all %d chunk starts for this shard.",
-            intervene_flag_key,
-            getattr(sub_ds, "root", "?"),
-            n,
-        )
-        return list(range(n))
-
-    flags = _hf_column_to_numpy_bool_1d(hf, intervene_flag_key)
-    ep_idx = _hf_column_to_numpy_int64_1d(hf, "episode_index")
-    ep_from = sub_ds.episode_data_index["from"].detach().cpu().numpy().astype(np.int64)
-    ep_to = sub_ds.episode_data_index["to"].detach().cpu().numpy().astype(np.int64)
-    deltas = np.array(_delta_offsets_for_sub_dataset(sub_ds), dtype=np.int64)
-
-    idx_range = np.arange(n, dtype=np.int64)[:, None]
-    raw = idx_range + deltas[None, :]
-    ep_start = ep_from[ep_idx][:, None]
-    ep_end = ep_to[ep_idx][:, None]
-    is_pad = (raw < ep_start) | (raw >= ep_end)
-    chunk_ok = np.ones(n, dtype=np.bool_)
-    for j in range(deltas.shape[0]):
-        padded = is_pad[:, j]
-        rj = raw[:, j]
-        # Padded slots are ignored; only index ``flags`` for in-range rows (``np.where`` is not lazy).
-        step_ok = np.zeros(n, dtype=np.bool_)
-        step_ok[padded] = True
-        m = ~padded
-        if m.any():
-            step_ok[m] = flags[rj[m]]
-        chunk_ok &= step_ok
-    return np.nonzero(chunk_ok)[0].tolist()
-
-
-@dataclass(frozen=True)
-class _ShardIndexProbe:
-    ds_path: Path
-    ok: bool
-    sub_ds: Any | None = None
-    n_frames: int = 0
-    num_episodes: int = 0
-    intervene_locals: list[int] | None = None
-
-
-def _build_delta_timestamps(
-    info: dict, chunk_size: int, action_sequence_keys
-) -> dict[str, list[float]]:
-    fps: float = info["fps"]
-    timestamps = [i / fps for i in range(chunk_size)]
-    data_keys = action_sequence_keys if action_sequence_keys is not None else []
-    return dict.fromkeys(data_keys, timestamps)
 
 
 # ---------------------------------------------------------------------------
@@ -417,7 +344,6 @@ class RollingLeRobotDataset(Dataset):
 
         self.root_dir = Path(root_dir)
         self.chunk_size = chunk_size
-        self._user_delta_timestamps = delta_timestamps
         self.keys = keys
         self.image_transforms = image_transforms
         self.min_frames = min_frames
@@ -426,7 +352,6 @@ class RollingLeRobotDataset(Dataset):
         self.require_all_intervene = bool(require_all_intervene)
         self.intervene_flag_key = intervene_flag_key
         self.window_size = window_size
-        self._index_load_workers = max(1, int(index_load_workers))
         self._window_physical_start: int = 0
         self._window_valid_slice_lo: int = 0
         self._valid_physical_indices: list[int] | None = None
@@ -438,11 +363,7 @@ class RollingLeRobotDataset(Dataset):
         self._rolling_access_lock = threading.RLock()
 
         # Sub-dataset **roots** indexed so far (paths only; no live LeRobot handles).
-        self._indexed_datasets: set[Path] = set()
         self._sub_datasets: list[Path] = []
-        # Legacy disk handles are unused by the in-memory training path.
-        self._lerobot_open: Any | None = None
-        self._lerobot_open_idx: int | None = None
 
         # Prefix-sum of lengths for O(log n) index dispatch.
         # _cumulative_lengths[i] = sum of lengths of sub_datasets[0..i-1].
@@ -501,155 +422,6 @@ class RollingLeRobotDataset(Dataset):
             self._window_physical_start = max(0, n - w)
             self._window_valid_slice_lo = 0
 
-    # ------------------------------------------------------------------
-    # Index construction
-    # ------------------------------------------------------------------
-
-    def _get_delta_timestamps(self, ds_path: Path) -> dict[str, list[float]] | None:
-        if self.chunk_size <= 1:
-            return None
-        if self._user_delta_timestamps is not None:
-            return self._user_delta_timestamps
-        with open(ds_path / "meta" / "info.json", encoding="utf-8") as f:
-            info = json.load(f)
-        return _build_delta_timestamps(info, self.chunk_size, self.action_sequence_keys)
-
-    def _probe_shard_for_index(self, ds_path: Path) -> _ShardIndexProbe:
-        ds_path = Path(ds_path)
-        if self._shard_cache_enabled:
-            store = self._in_memory_shards.get(ds_path)
-            if store is not None:
-                n_frames = len(store)
-                num_episodes = store.num_episodes
-                intervene_locals: list[int] | None = None
-                if self.require_all_intervene:
-                    intervene_locals = _compute_intervene_valid_local_indices_in_memory(
-                        store,
-                        self.intervene_flag_key,
-                        self.chunk_size,
-                    )
-                return _ShardIndexProbe(
-                    ds_path=ds_path,
-                    ok=True,
-                    sub_ds=None,
-                    n_frames=n_frames,
-                    num_episodes=num_episodes,
-                    intervene_locals=intervene_locals,
-                )
-
-        from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
-
-        delta_timestamps = self._get_delta_timestamps(ds_path)
-        try:
-            sub_ds = LeRobotDataset(
-                repo_id=ds_path.name,
-                root=ds_path,
-                delta_timestamps=delta_timestamps,
-                image_transforms=self.image_transforms,
-                download_videos=False,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "[RollingLeRobotDataset] failed to load sub-dataset %s: %s",
-                ds_path,
-                exc,
-            )
-            return _ShardIndexProbe(ds_path=ds_path, ok=False)
-        n_frames = len(sub_ds)
-        num_episodes = int(getattr(sub_ds, "num_episodes", 0))
-        intervene_locals: list[int] | None = None
-        if self.require_all_intervene:
-            intervene_locals = _compute_intervene_valid_local_indices(
-                sub_ds, self.intervene_flag_key
-            )
-        return _ShardIndexProbe(
-            ds_path=ds_path,
-            ok=True,
-            sub_ds=sub_ds,
-            n_frames=n_frames,
-            num_episodes=num_episodes,
-            intervene_locals=intervene_locals,
-        )
-
-    def _build_index(
-        self,
-        datasets: list[Path],
-        out_open_handles: dict[Path, Any] | None = None,
-    ) -> int:
-        pending = [p for p in datasets if p not in self._indexed_datasets]
-        n_new = 0
-        if not pending:
-            self._update_window_sampling_bounds()
-            return 0
-
-        workers = self._index_load_workers
-        if workers > 1 and len(pending) > 1:
-            max_w = min(workers, len(pending))
-            with ThreadPoolExecutor(max_workers=max_w) as ex:
-                probes: list[_ShardIndexProbe] = list(
-                    ex.map(self._probe_shard_for_index, pending)
-                )
-        else:
-            probes = [self._probe_shard_for_index(p) for p in pending]
-
-        for probe in probes:
-            if not probe.ok:
-                continue
-            # sub_ds is None for in-memory shards (no LeRobotDataset opened);
-            # that is expected and must not be treated as a failure.
-            if probe.sub_ds is None and not self._shard_cache_enabled:
-                continue
-            ds_path = probe.ds_path
-            physical_base = self._cumulative_lengths[-1]
-            n_frames = probe.n_frames
-            self._sub_datasets.append(ds_path)
-            self._cumulative_lengths.append(physical_base + n_frames)
-            if (
-                self.require_all_intervene
-                and self._valid_physical_indices is not None
-                and probe.intervene_locals is not None
-            ):
-                assert self._valid_physical_set is not None
-                for local_i in probe.intervene_locals:
-                    gidx = physical_base + int(local_i)
-                    self._valid_physical_indices.append(gidx)
-                    self._valid_physical_set.add(gidx)
-            self._indexed_datasets.add(ds_path)
-            self._total_episodes += probe.num_episodes
-            n_new += 1
-            if out_open_handles is not None and probe.sub_ds is not None:
-                out_open_handles[ds_path] = probe.sub_ds
-
-        self._update_window_sampling_bounds()
-        return n_new
-
-    def _ensure_lerobot_open(self, ds_idx: int) -> Any:
-        """Return a :class:`LeRobotDataset` for shard *ds_idx*, (re)opening if needed."""
-        if self._lerobot_open_idx == ds_idx and self._lerobot_open is not None:
-            return self._lerobot_open
-        from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
-
-        root = self._sub_datasets[ds_idx]
-        delta_timestamps = self._get_delta_timestamps(root)
-        self._lerobot_open = LeRobotDataset(
-            repo_id=root.name,
-            root=root,
-            delta_timestamps=delta_timestamps,
-            image_transforms=self.image_transforms,
-            download_videos=False,
-        )
-        self._lerobot_open_idx = ds_idx
-        return self._lerobot_open
-
-    def _load_item_from_open_lerobot(
-        self, lerobot_ds: Any, local_idx: int
-    ) -> dict[str, Any]:
-        """Decode one sample from an already-open :class:`LeRobotDataset`."""
-        item: dict[str, Any] = lerobot_ds[local_idx]
-        if self.keys is not None:
-            item = {k: v for k, v in item.items() if k in self.keys}
-        return item
-
     def _load_item_from_lerobot(self, idx: int) -> dict[str, Any]:
         ds_idx = bisect.bisect_right(self._cumulative_lengths, idx) - 1
         local_idx = idx - self._cumulative_lengths[ds_idx]
@@ -695,7 +467,6 @@ class RollingLeRobotDataset(Dataset):
             else:
                 store = self._new_in_memory_store()
                 self._in_memory_shards[path] = store
-                self._indexed_datasets.add(path)
                 self._sub_datasets.append(path)
                 physical_base = self._cumulative_lengths[-1]
                 self._cumulative_lengths.append(physical_base)
@@ -731,24 +502,6 @@ class RollingLeRobotDataset(Dataset):
                 added_frames,
                 self._num_physical_frames(),
                 len(self),
-            )
-
-    def add_shard_to_memory(self, path: str | Path, episodes: list[list[dict]]) -> None:
-        if not episodes:
-            return
-        path = Path(path)
-        for ep_frames in episodes:
-            self.append_episode_to_memory(path, ep_frames)
-        with self._rolling_access_lock:
-            store = self._in_memory_shards.get(path)
-            if store is None:
-                return
-            self._in_memory_shards[path] = store
-            logger.debug(
-                "[RollingLeRobotDataset] shard cached: %s (%d episodes, %d frames)",
-                path.name,
-                len(store._episode_datasets),
-                len(store),
             )
 
     def _evict_stale_shards(self) -> int:

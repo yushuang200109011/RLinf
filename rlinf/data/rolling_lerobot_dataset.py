@@ -134,30 +134,39 @@ class InMemoryArrowStore:
     # Episode addition
     # ------------------------------------------------------------------
 
-    def add_episode(self, ep_frames: list[dict]) -> None:
+    def _prepare_episode_dataset(
+        self,
+        ep_frames: list[dict],
+        base: int | None = None,
+        episode_index: int | None = None,
+    ) -> dict[str, Any]:
         import PIL.Image as PILImage
         from datasets import Dataset
         from lerobot.common.datasets.utils import hf_transform_to_torch
 
         n = len(ep_frames)
         if n == 0:
-            return
+            return {}
 
-        if self._hf_features is None:
-            self._hf_features, self._image_keys = self._infer_hf_features(ep_frames[0])
+        hf_features = self._hf_features
+        image_keys = self._image_keys
+        if hf_features is None:
+            hf_features, image_keys = self._infer_hf_features(ep_frames[0])
 
-        ep_idx = len(self._ep_from)
-        base = self._total_frames
+        ep_idx = len(self._ep_from) if episode_index is None else int(episode_index)
+        base = self._total_frames if base is None else int(base)
+        task_to_idx = dict(self._task_to_idx)
+        tasks = dict(self._tasks)
 
         # Register task strings and build per-frame task_index array.
         task_indices: list[int] = []
         for frame in ep_frames:
             task_str = frame.get("task", "")
-            if task_str not in self._task_to_idx:
-                tidx = len(self._task_to_idx)
-                self._task_to_idx[task_str] = tidx
-                self._tasks[tidx] = task_str
-            task_indices.append(self._task_to_idx[task_str])
+            if task_str not in task_to_idx:
+                tidx = len(task_to_idx)
+                task_to_idx[task_str] = tidx
+                tasks[tidx] = task_str
+            task_indices.append(task_to_idx[task_str])
 
         ep_dict: dict[str, Any] = {
             "index": np.arange(base, base + n, dtype=np.int64),
@@ -167,7 +176,7 @@ class InMemoryArrowStore:
             "task_index": np.array(task_indices, dtype=np.int64),
         }
 
-        for key in self._hf_features:
+        for key in hf_features:
             if key in (
                 "index",
                 "episode_index",
@@ -176,7 +185,7 @@ class InMemoryArrowStore:
                 "task_index",
             ):
                 continue
-            if key in self._image_keys:
+            if key in image_keys:
                 ep_dict[key] = [PILImage.fromarray(f[key]) for f in ep_frames]
             else:
                 vals = [f.get(key) for f in ep_frames]
@@ -187,12 +196,42 @@ class InMemoryArrowStore:
                         stacked.squeeze(1) if stacked.shape == (n, 1) else stacked
                     )
 
-        ep_ds = Dataset.from_dict(ep_dict, features=self._hf_features)
+        ep_ds = Dataset.from_dict(ep_dict, features=hf_features)
         ep_ds.set_transform(hf_transform_to_torch)
-        self._episode_datasets.append(ep_ds)
+        return {
+            "dataset": ep_ds,
+            "base": base,
+            "num_frames": n,
+            "hf_features": hf_features,
+            "image_keys": image_keys,
+            "task_to_idx": task_to_idx,
+            "tasks": tasks,
+        }
+
+    def _commit_prepared_episode(self, prepared_episode: dict[str, Any]) -> int:
+        if not prepared_episode:
+            return 0
+
+        base = int(prepared_episode["base"])
+        if base != self._total_frames:
+            raise ValueError("Prepared episode base no longer matches store length.")
+
+        n = int(prepared_episode["num_frames"])
+        self._hf_features = prepared_episode["hf_features"]
+        self._image_keys = prepared_episode["image_keys"]
+        self._task_to_idx = prepared_episode["task_to_idx"]
+        self._tasks = prepared_episode["tasks"]
+        self._episode_datasets.append(prepared_episode["dataset"])
         self._ep_from.append(base)
         self._ep_to.append(base + n)
         self._total_frames += n
+        return n
+
+    def add_episode(self, ep_frames: list[dict]) -> None:
+        prepared_episode = self._prepare_episode_dataset(ep_frames)
+        if not prepared_episode:
+            return
+        self._commit_prepared_episode(prepared_episode)
 
     # ------------------------------------------------------------------
     # Access
@@ -255,61 +294,6 @@ class InMemoryArrowStore:
             "in_memory_store_frames": self._total_frames,
             "in_memory_store_hits": self._hits,
         }
-
-
-def _compute_intervene_valid_local_indices_in_memory(
-    store: InMemoryArrowStore,
-    intervene_flag_key: str,
-    chunk_size: int,
-) -> list[int]:
-    n = len(store)
-    if n == 0:
-        return []
-
-    for ep_ds in store._episode_datasets:
-        if intervene_flag_key not in ep_ds.column_names:
-            logger.warning(
-                "[RollingLeRobotDataset] require_all_intervene=True but column %r "
-                "missing in in-memory shard; keeping all %d chunk starts for this shard.",
-                intervene_flag_key,
-                n,
-            )
-            return list(range(n))
-
-    flag_parts = [
-        _hf_column_to_numpy_bool_1d(ep_ds, intervene_flag_key)
-        for ep_ds in store._episode_datasets
-    ]
-    flags = np.concatenate(flag_parts, axis=0)
-    assert int(flags.shape[0]) == n
-
-    ep_from = np.array(list(store._ep_from), dtype=np.int64)
-    ep_to = np.array(list(store._ep_to), dtype=np.int64)
-    ep_idx = np.empty(n, dtype=np.int64)
-    for ei in range(len(ep_from)):
-        ep_idx[ep_from[ei] : ep_to[ei]] = ei
-
-    if chunk_size <= 1:
-        deltas = np.array([0], dtype=np.int64)
-    else:
-        deltas = np.arange(chunk_size, dtype=np.int64)
-
-    idx_range = np.arange(n, dtype=np.int64)[:, None]
-    raw = idx_range + deltas[None, :]
-    ep_start = ep_from[ep_idx][:, None]
-    ep_end = ep_to[ep_idx][:, None]
-    is_pad = (raw < ep_start) | (raw >= ep_end)
-    chunk_ok = np.ones(n, dtype=np.bool_)
-    for j in range(int(deltas.shape[0])):
-        padded = is_pad[:, j]
-        rj = raw[:, j]
-        step_ok = np.zeros(n, dtype=np.bool_)
-        step_ok[padded] = True
-        m = ~padded
-        if m.any():
-            step_ok[m] = flags[rj[m]]
-        chunk_ok &= step_ok
-    return np.nonzero(chunk_ok)[0].tolist()
 
 
 # ---------------------------------------------------------------------------
@@ -463,17 +447,38 @@ class RollingLeRobotDataset(Dataset):
                         "Can only append to the latest in-memory LeRobot shard."
                     )
                 store = self._in_memory_shards[path]
-                physical_base = self._cumulative_lengths[ds_idx]
             else:
                 store = self._new_in_memory_store()
+
+            old_len = len(store)
+            episode_index = store.num_episodes
+
+        # Build the expensive HuggingFace episode outside the sampling lock.
+        prepared_episode = store._prepare_episode_dataset(
+            ep_frames,
+            base=old_len,
+            episode_index=episode_index,
+        )
+        if not prepared_episode:
+            return
+
+        with self._rolling_access_lock:
+            if path in self._in_memory_shards:
+                ds_idx = self._sub_datasets.index(path)
+                if ds_idx != len(self._sub_datasets) - 1:
+                    raise ValueError(
+                        "Can only append to the latest in-memory LeRobot shard."
+                    )
+                store = self._in_memory_shards[path]
+                physical_base = self._cumulative_lengths[ds_idx]
+            else:
                 self._in_memory_shards[path] = store
                 self._sub_datasets.append(path)
                 physical_base = self._cumulative_lengths[-1]
                 self._cumulative_lengths.append(physical_base)
 
-            old_len = len(store)
-            store.add_episode(ep_frames)
-            added_frames = len(store) - old_len
+            old_len = int(prepared_episode["base"])
+            added_frames = store._commit_prepared_episode(prepared_episode)
             if added_frames <= 0:
                 return
 
@@ -481,14 +486,28 @@ class RollingLeRobotDataset(Dataset):
             self._total_episodes += 1
             if self.require_all_intervene and self._valid_physical_indices is not None:
                 assert self._valid_physical_set is not None
-                valid_locals = _compute_intervene_valid_local_indices_in_memory(
-                    store,
-                    self.intervene_flag_key,
-                    self.chunk_size,
-                )
+                ep_ds = prepared_episode["dataset"]
+                if self.intervene_flag_key not in ep_ds.column_names:
+                    logger.warning(
+                        "[RollingLeRobotDataset] require_all_intervene=True but "
+                        "column %r missing in appended in-memory episode; keeping "
+                        "all %d chunk starts for this episode.",
+                        self.intervene_flag_key,
+                        added_frames,
+                    )
+                    valid_locals = range(old_len, old_len + added_frames)
+                else:
+                    flags = _hf_column_to_numpy_bool_1d(ep_ds, self.intervene_flag_key)
+                    assert int(flags.shape[0]) == added_frames
+                    deltas = np.arange(max(1, int(self.chunk_size)), dtype=np.int64)
+                    offsets = np.arange(added_frames, dtype=np.int64)[:, None]
+                    raw = offsets + deltas[None, :]
+                    in_episode = raw < added_frames
+                    step_ok = np.ones_like(in_episode, dtype=np.bool_)
+                    step_ok[in_episode] = flags[raw[in_episode]]
+                    valid_offsets = np.nonzero(step_ok.all(axis=1))[0]
+                    valid_locals = (old_len + int(offset) for offset in valid_offsets)
                 for local_i in valid_locals:
-                    if local_i < old_len:
-                        continue
                     gidx = physical_base + int(local_i)
                     self._valid_physical_indices.append(gidx)
                     self._valid_physical_set.add(gidx)

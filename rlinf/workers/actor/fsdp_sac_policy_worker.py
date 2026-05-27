@@ -64,7 +64,7 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
         self.setup_model_and_optimizer(initialize_target=True)
         self.setup_sac_components()
         self.soft_update_target_model(tau=1.0)
-        if self.use_dsrl:
+        if self.use_dsrl or self.use_residual_rl:
             self._init_target_shadow()
         if self.cfg.actor.get("enable_offload", False):
             self.offload_param_and_grad()
@@ -106,13 +106,17 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
             self.target_model.requires_grad_(False)
             self.target_model_initialized = True
 
-        self.use_dsrl = self.cfg.actor.model.get("openpi", {}).get("use_dsrl", False)
+        openpi_cfg = self.cfg.actor.model.get("openpi", {})
+        self.use_dsrl = openpi_cfg.get("use_dsrl", False)
+        self.use_residual_rl = openpi_cfg.get("use_residual_rl", False)
         use_dsrl = self.use_dsrl
         if use_dsrl:
             # DSRL: separate actor/critic encoders into different optimizer groups
             param_filters = {
                 "critic": ["critic_image_encoder", "critic_state_encoder", "q_head"]
             }
+        elif self.use_residual_rl:
+            param_filters = {"critic": ["residual_critic_state_encoder", "q_head"]}
         else:
             param_filters = {"critic": ["encoders", "encoder", "q_head", "state_proj"]}
         filtered_optim_config = {"critic": self.cfg.actor.critic_optim}
@@ -344,8 +348,11 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
         use_crossq = self.cfg.algorithm.get("q_head_type", "default") == "crossq"
         bootstrap_type = self.cfg.algorithm.get("bootstrap_type", "standard")
         agg_q = self.cfg.algorithm.get("agg_q", "min")
-        use_dsrl = self.cfg.actor.model.get("openpi", {}).get("use_dsrl", False)
-        if use_dsrl:
+        openpi_cfg = self.cfg.actor.model.get("openpi", {})
+        use_dsrl = openpi_cfg.get("use_dsrl", False)
+        use_residual_rl = openpi_cfg.get("use_residual_rl", False)
+        use_chunk_sac = use_dsrl or use_residual_rl
+        if use_chunk_sac:
             num_action_chunks = self.cfg.actor.model.get("num_action_chunks", 1)
             discount = self.cfg.algorithm.gamma**num_action_chunks
             rewards_for_bootstrap = batch["rewards"][:, 0:1].to(self.torch_dtype)
@@ -510,7 +517,7 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
             )
         metrics = {
             f"q_value_{q_id}": all_qf_pi[..., q_id].mean().item()
-            for q_id in range(self.cfg.actor.model.get("num_q_heads", 2))
+            for q_id in range(self._get_sac_num_q_heads())
         }
         if agg_q == "min":
             qf_pi, _ = torch.min(all_qf_pi, dim=1, keepdim=True)
@@ -543,6 +550,14 @@ class EmbodiedSACFSDPPolicy(EmbodiedFSDPActor):
         alpha = self.entropy_temp.compute_alpha()
         alpha_loss = -alpha * (log_pi.mean() + self.target_entropy)
         return alpha_loss
+
+    def _get_sac_num_q_heads(self) -> int:
+        openpi_cfg = self.cfg.actor.model.get("openpi", {})
+        if openpi_cfg.get("use_dsrl", False):
+            return openpi_cfg.get("dsrl_num_q_heads", 2)
+        if openpi_cfg.get("use_residual_rl", False):
+            return openpi_cfg.get("residual_num_q_heads", 2)
+        return self.cfg.actor.model.get("num_q_heads", 2)
 
     @Worker.timer("update_one_epoch")
     def update_one_epoch(self, train_actor: bool = True):

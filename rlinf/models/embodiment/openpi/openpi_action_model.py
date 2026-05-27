@@ -82,6 +82,16 @@ class OpenPi0Config(Pi0Config):
         default_factory=lambda: (128, 128, 128)
     )  # Hidden dims for Q-head and GaussianPolicy
 
+    # ===== Residual RL-specific parameters =====
+    use_residual_rl: bool = False  # Enable residual SAC on top of frozen OpenPI
+    residual_delta_scale: float = 0.05  # Scale applied before adding residual action
+    residual_num_q_heads: int = 2  # Number of residual Q-networks
+    residual_state_dim: int = 8  # Raw state dimension for residual state encoder
+    residual_state_latent_dim: int = 64  # Hidden dim for residual state encoder
+    residual_hidden_dims: tuple = field(
+        default_factory=lambda: (128, 128, 128)
+    )  # Hidden dims for residual actor and Q-head
+
     # ===== NFT-specific parameters =====
     is_nft: bool = False
 
@@ -233,6 +243,45 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
                 num_q_heads=self.config.dsrl_num_q_heads,
                 output_dim=1,
             ).to(dtype=_dsrl_dtype)
+
+        # ===== Residual RL components initialization =====
+        if self.config.use_residual_rl:
+            from rlinf.models.embodiment.modules.compact_encoders import (
+                CompactStateEncoder,
+            )
+            from rlinf.models.embodiment.modules.gaussian_policy import GaussianPolicy
+            from rlinf.models.embodiment.modules.q_head import MultiQHead
+
+            _residual_dtype = torch.bfloat16
+            residual_prefix_dim = 2048 if "pi05_" in self.config.config_name else 1024
+            residual_feature_dim = (
+                residual_prefix_dim + self.config.residual_state_latent_dim
+            )
+            residual_action_dim = self.config.action_chunk * self.config.action_env_dim
+
+            self.residual_action_net = GaussianPolicy(
+                input_dim=residual_feature_dim,
+                output_dim=residual_action_dim,
+                hidden_dims=self.config.residual_hidden_dims,
+                low=None,
+                high=None,
+                action_horizon=1,
+            ).to(dtype=_residual_dtype)
+            self.residual_actor_state_encoder = CompactStateEncoder(
+                state_dim=self.config.residual_state_dim,
+                hidden_dim=self.config.residual_state_latent_dim,
+            ).to(dtype=_residual_dtype)
+            self.residual_critic_state_encoder = CompactStateEncoder(
+                state_dim=self.config.residual_state_dim,
+                hidden_dim=self.config.residual_state_latent_dim,
+            ).to(dtype=_residual_dtype)
+            self.q_head = MultiQHead(
+                hidden_size=residual_feature_dim,
+                action_feature_dim=residual_action_dim,
+                hidden_dims=list(self.config.residual_hidden_dims),
+                num_q_heads=self.config.residual_num_q_heads,
+                output_dim=1,
+            ).to(dtype=_residual_dtype)
 
         for name, module in self.named_modules():
             # Set _fsdp_wrap_name to the last part of the path (e.g., "model.action_in_proj" -> "action_in_proj")
@@ -520,6 +569,7 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
         observation = _model.Observation.from_dict(processed_obs)
 
         is_dsrl_active = self.config.use_dsrl
+        is_residual_active = self.config.use_residual_rl
         if is_dsrl_active:
             # DSRL mode (both train and eval)
 
@@ -548,6 +598,35 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
             prev_logprobs = noise_logprob  # SAC noise logprob
             prev_values = outputs.get("prev_values")
             forward_action = noise_actions  # Used for SAC training
+
+        elif is_residual_active:
+            # Residual SAC mode: frozen OpenPI proposes a base action, while SAC
+            # learns a bounded residual delta evaluated by the critic.
+            outputs = self.sample_actions(
+                observation, mode="eval", compute_values=compute_values
+            )
+            base_actions = self.output_transform(
+                {"actions": outputs["actions"], "state": observation.state}
+            )["actions"]
+
+            residual_delta, residual_logprob, _ = self.sac_forward(
+                env_obs, train=False, mode=mode
+            )
+            residual_delta_chunk = residual_delta.reshape(
+                residual_delta.shape[0],
+                self.config.action_chunk,
+                self.config.action_env_dim,
+            )
+            residual_delta_chunk = residual_delta_chunk.to(
+                device=base_actions.device, dtype=base_actions.dtype
+            )
+            actions = (
+                base_actions
+                + self.config.residual_delta_scale * residual_delta_chunk
+            )
+            prev_logprobs = residual_logprob
+            prev_values = outputs.get("prev_values")
+            forward_action = residual_delta
 
         else:
             # Non-DSRL or eval mode
@@ -972,6 +1051,11 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
         # prefix_output:
         # pi05: [bs, (256 * 3 + 200) = 968, 2048]
         # pi0: [bs, (256 * 3 + 48) = 816, 1024]
+        prefix_out_value = self._pool_value_prefix(prefix_output)
+        values_vlm = self.value_head(prefix_out_value)[:, 0]
+        return values_vlm
+
+    def _get_value_prefix_mask(self):
         # token length
         if "pi05_" in self.config.config_name:
             lang_token_len = 200
@@ -979,6 +1063,8 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
         elif "pi0_" in self.config.config_name:
             lang_token_len = 48
             all_token_length = 816
+        else:
+            raise ValueError(f"Unsupported OpenPI config: {self.config.config_name}")
 
         if self.config.value_vlm_mode == "mean_token":
             prefix_mask = (
@@ -990,11 +1076,15 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
             prefix_mask = [False] * (all_token_length - 1) + [True] * 1
         elif self.config.value_vlm_mode == "first_token":
             prefix_mask = [True] * 1 + [False] * (all_token_length - 1)
+        else:
+            raise ValueError(f"Invalid value_vlm_mode: {self.config.value_vlm_mode}")
+        return prefix_mask
+
+    def _pool_value_prefix(self, prefix_output):
+        prefix_mask = self._get_value_prefix_mask()
         prefix_out_value = prefix_output[:, prefix_mask, :]
         prefix_out_value = prefix_out_value.mean(dim=1, keepdim=False)
-        prefix_out_value = prefix_out_value.to(dtype=torch.float32)
-        values_vlm = self.value_head(prefix_out_value)[:, 0]
-        return values_vlm
+        return prefix_out_value.to(dtype=torch.float32)
 
     def gaussian_entropy(self, sigma):
         mask = sigma == 0
@@ -1010,9 +1100,9 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
                 params.requires_grad = False
 
             # ========== DSRL additional freezing ==========
-            if self.config.use_dsrl:
+            if self.config.use_dsrl or self.config.use_residual_rl:
                 self.logger.info(
-                    "[FREEZE_VLM] DSRL mode: freezing gemma_expert parameters"
+                    "[FREEZE_VLM] SAC extension mode: freezing gemma_expert parameters"
                 )
                 self.paligemma_with_expert.gemma_expert.eval()
                 for params in self.paligemma_with_expert.gemma_expert.parameters():
@@ -1022,7 +1112,7 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
                 # Pi0 has: action_in_proj, action_out_proj, state_proj, action_time_mlp_in/out
                 # Pi0.5 has: action_in_proj, action_out_proj, time_mlp_in/out (no state_proj)
                 self.logger.info(
-                    "[FREEZE_VLM] DSRL mode: freezing projection layers (used in rollout/eval but not optimized)"
+                    "[FREEZE_VLM] SAC extension mode: freezing projection layers (used in rollout/eval but not optimized)"
                 )
                 if self.pi05:
                     projection_names = [
@@ -1053,7 +1143,7 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
                 # Freeze reinflow_explore_noise_net (only used in reinflow diffuser sampling)
                 if hasattr(self, "reinflow_explore_noise_net"):
                     self.logger.info(
-                        "[FREEZE_VLM] DSRL mode: freezing reinflow_explore_noise_net (used in non-DSRL rollout but not optimized)"
+                        "[FREEZE_VLM] SAC extension mode: freezing reinflow_explore_noise_net (used in rollout/eval but not optimized)"
                     )
                     self.reinflow_explore_noise_net.eval()
                     noise_net_params = 0
@@ -1085,6 +1175,14 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
             logprobs: [B] - log probabilities
             dist_params: (mean, std) or None - distribution parameters for logging
         """
+        if self.config.use_residual_rl:
+            return self._residual_sac_forward(
+                obs=obs,
+                data=data,
+                train=train,
+                return_dist_params=return_dist_params,
+                **kwargs,
+            )
         if not self.config.use_dsrl:
             raise ValueError("sac_forward called but use_dsrl=False")
 
@@ -1159,6 +1257,15 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
         Returns:
             q_values: [B, num_q_heads] - Q-values from all Q-networks.
         """
+        if self.config.use_residual_rl:
+            return self._residual_sac_q_forward(
+                obs=obs,
+                data=data,
+                actions=actions,
+                detach_encoder=detach_encoder,
+                train=train,
+                **kwargs,
+            )
         if not self.config.use_dsrl:
             raise ValueError("sac_q_forward called but use_dsrl=False")
 
@@ -1208,6 +1315,121 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
         q_values = self.q_head(state_features, image_features, actions)
 
         return q_values
+
+    # ===== Residual RL-specific methods =====
+
+    def _build_openpi_observation(self, obs):
+        if obs is None:
+            raise ValueError("Residual SAC requires an observation dict.")
+
+        if "observation/image" in obs:
+            processed_obs = {
+                key: value for key, value in obs.items() if "/" in key
+            }
+            if "prompt" in obs:
+                processed_obs["prompt"] = obs["prompt"]
+            if "tokenized_prompt" in obs:
+                processed_obs["tokenized_prompt"] = obs["tokenized_prompt"]
+            if "tokenized_prompt_mask" in obs:
+                processed_obs["tokenized_prompt_mask"] = obs["tokenized_prompt_mask"]
+        elif "main_images" in obs:
+            processed_obs = {"observation/image": obs["main_images"]}
+            if "calvin" in self.config.config_name:
+                state = obs["states"]
+                processed_obs["observation/state_ee_pos"] = state[:, :3]
+                processed_obs["observation/state_ee_rot"] = state[:, 3:6]
+                processed_obs["observation/state_gripper"] = state[:, 6:7]
+            else:
+                processed_obs["observation/state"] = obs["states"]
+            if obs.get("wrist_images", None) is not None:
+                processed_obs["observation/wrist_image"] = obs["wrist_images"]
+            if obs.get("extra_view_images", None) is not None:
+                processed_obs["observation/extra_view_image"] = obs[
+                    "extra_view_images"
+                ]
+            if "task_descriptions" in obs:
+                processed_obs["prompt"] = obs["task_descriptions"]
+            if "tokenized_prompt" in obs:
+                processed_obs["tokenized_prompt"] = obs["tokenized_prompt"]
+            if "tokenized_prompt_mask" in obs:
+                processed_obs["tokenized_prompt_mask"] = obs["tokenized_prompt_mask"]
+        else:
+            raise ValueError(
+                f"Invalid obs format: {obs.keys()}. Expected OpenPI or env observation keys."
+            )
+
+        processed_obs = self.input_transform(processed_obs, transpose=False)
+        processed_obs = self.precision_processor(processed_obs)
+        return _model.Observation.from_dict(processed_obs)
+
+    def _get_residual_features(self, obs, *, critic: bool):
+        observation = self._build_openpi_observation(obs)
+        images, img_masks, lang_tokens, lang_masks, state = (
+            self._preprocess_observation(observation, train=False)
+        )
+        prefix_output, _, _ = self._build_prefix_cache(
+            images, img_masks, lang_tokens, lang_masks
+        )
+        prefix_features = self._pool_value_prefix(prefix_output)
+        if self.config.detach_critic_input:
+            prefix_features = prefix_features.detach()
+
+        states = self._preprocess_states(state)
+        encoder = (
+            self.residual_critic_state_encoder
+            if critic
+            else self.residual_actor_state_encoder
+        )
+        device = next(encoder.parameters()).device
+        states = states.to(device=device, dtype=torch.bfloat16)
+        prefix_features = prefix_features.to(device=device, dtype=torch.bfloat16)
+        state_features = encoder(states)
+        return torch.cat([prefix_features, state_features], dim=-1)
+
+    def _residual_sac_forward(
+        self, obs=None, data=None, train=False, return_dist_params=False, **kwargs
+    ):
+        if obs is None:
+            obs = data.get("obs", data) if data is not None else kwargs.get("obs", {})
+
+        features = self._get_residual_features(obs, critic=False)
+        mode = kwargs.get("mode", "train")
+        deterministic = mode == "eval"
+        residual_delta, logprobs = self.residual_action_net.sample(
+            features, deterministic=deterministic
+        )
+
+        dist_params = None
+        if return_dist_params:
+            dist = self.residual_action_net.forward(features)
+            dist_params = (dist.mean, dist.stddev)
+
+        return residual_delta, logprobs, dist_params
+
+    def _residual_sac_q_forward(
+        self,
+        obs=None,
+        data=None,
+        actions=None,
+        detach_encoder=False,
+        train=False,
+        **kwargs,
+    ):
+        if obs is None:
+            obs = data.get("obs", data) if data is not None else kwargs.get("obs", {})
+        if actions is None:
+            actions = kwargs.get("actions")
+        if actions is None:
+            raise ValueError("Residual SAC Q forward requires actions.")
+
+        features = self._get_residual_features(obs, critic=True)
+        if detach_encoder:
+            features = features.detach()
+
+        if actions.dim() == 3:
+            actions = actions.reshape(actions.shape[0], -1)
+        actions = actions.to(device=features.device, dtype=features.dtype)
+        return self.q_head(features, actions)
 
     # ===== NFT-specific methods =====
 

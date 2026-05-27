@@ -61,6 +61,9 @@ class EnvWorker(Worker):
 
         self.collect_transitions = self.cfg.rollout.get("collect_transitions", False)
         self.collect_prev_infos = self.cfg.rollout.get("collect_prev_infos", True)
+        self.use_residual_rl = self.cfg.actor.model.get("openpi", {}).get(
+            "use_residual_rl", False
+        )
         self.stage_num = self.cfg.rollout.pipeline_stage_num
 
         self.reward_mode = self.cfg.get("reward", {}).get("reward_mode", "per_step")
@@ -1036,6 +1039,9 @@ class EnvWorker(Worker):
                             if env_output.dones.any() and self.cfg.env.train.auto_reset
                             else env_output.obs
                         )
+                        curr_obs, next_obs = self._attach_residual_replay_tokens(
+                            curr_obs, next_obs, rollout_result.forward_inputs
+                        )
                         self.rollout_results[stage_id].append_transitions(
                             curr_obs, next_obs
                         )
@@ -1092,6 +1098,23 @@ class EnvWorker(Worker):
             env_metrics[key] = torch.cat(value, dim=0).contiguous().cpu()
 
         return env_metrics
+
+    def _attach_residual_replay_tokens(
+        self,
+        curr_obs: dict[str, Any],
+        next_obs: dict[str, Any],
+        forward_inputs: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        if not self.use_residual_rl:
+            return curr_obs, next_obs
+
+        curr_obs = dict(curr_obs)
+        next_obs = dict(next_obs)
+        for key in ("tokenized_prompt", "tokenized_prompt_mask"):
+            if key in forward_inputs:
+                curr_obs[key] = forward_inputs[key]
+                next_obs[key] = forward_inputs[key]
+        return curr_obs, next_obs
 
     @Worker.timer("interact")
     async def interact(

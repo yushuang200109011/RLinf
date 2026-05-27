@@ -253,7 +253,7 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
             from rlinf.models.embodiment.modules.q_head import MultiQHead
 
             _residual_dtype = torch.bfloat16
-            residual_prefix_dim = 2048 if "pi05_" in self.config.config_name else 1024
+            residual_prefix_dim = self._get_residual_prefix_dim()
             residual_feature_dim = (
                 residual_prefix_dim + self.config.residual_state_latent_dim
             )
@@ -287,6 +287,24 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
             # Set _fsdp_wrap_name to the last part of the path (e.g., "model.action_in_proj" -> "action_in_proj")
             path_parts = name.split(".")
             setattr(module, "_fsdp_wrap_name", path_parts[-1] if path_parts else name)
+
+    def _get_residual_prefix_dim(self) -> int:
+        """Return the hidden size produced by the PaliGemma prefix stream."""
+        paligemma = self.paligemma_with_expert.paligemma
+        language_model = getattr(paligemma, "language_model", None)
+        config = getattr(language_model, "config", None)
+        hidden_size = getattr(config, "hidden_size", None)
+        if hidden_size is not None:
+            return int(hidden_size)
+
+        model = getattr(paligemma, "model", None)
+        language_model = getattr(model, "language_model", None)
+        config = getattr(language_model, "config", None)
+        hidden_size = getattr(config, "hidden_size", None)
+        if hidden_size is not None:
+            return int(hidden_size)
+
+        raise ValueError("Unable to infer PaliGemma prefix hidden size.")
 
     def set_global_step(self, global_step):
         self.global_step = global_step

@@ -951,6 +951,24 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
         )
         return prefix_output, prefix_pad_masks, past_key_values
 
+    def _build_prefix_output(self, images, img_masks, lang_tokens, lang_masks):
+        """Embed prefix tokens without building a KV cache."""
+        prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(
+            images, img_masks, lang_tokens, lang_masks
+        )
+        prefix_att_2d_masks = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
+        prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
+        prefix_att_2d_masks_4d = self._prepare_attention_masks_4d(prefix_att_2d_masks)
+        self.paligemma_with_expert.paligemma.language_model.config._attn_implementation = "eager"  # noqa: SLF001
+        outputs_embeds, _ = self.paligemma_with_expert.forward(
+            attention_mask=prefix_att_2d_masks_4d,
+            position_ids=prefix_position_ids,
+            past_key_values=None,
+            inputs_embeds=[prefix_embs, None],
+            use_cache=False,
+        )
+        return outputs_embeds[0]
+
     def _compute_value_from_suffix(self, suffix_out):
         """Compute value from suffix output using value head."""
         if self.config.chunk_critic_input:
@@ -1367,12 +1385,19 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
         images, img_masks, lang_tokens, lang_masks, state = (
             self._preprocess_observation(observation, train=False)
         )
-        prefix_output, _, _ = self._build_prefix_cache(
-            images, img_masks, lang_tokens, lang_masks
-        )
-        prefix_features = self._pool_value_prefix(prefix_output)
-        if self.config.detach_critic_input:
-            prefix_features = prefix_features.detach()
+        if critic:
+            with torch.no_grad():
+                prefix_output = self._build_prefix_output(
+                    images, img_masks, lang_tokens, lang_masks
+                )
+                prefix_features = self._pool_value_prefix(prefix_output)
+        else:
+            prefix_output, _, _ = self._build_prefix_cache(
+                images, img_masks, lang_tokens, lang_masks
+            )
+            prefix_features = self._pool_value_prefix(prefix_output)
+            if self.config.detach_critic_input:
+                prefix_features = prefix_features.detach()
 
         states = self._preprocess_states(state)
         encoder = (

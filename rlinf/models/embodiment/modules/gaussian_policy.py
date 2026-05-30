@@ -153,7 +153,7 @@ class GaussianPolicy(nn.Module):
         input_dim,
         output_dim,
         hidden_dims=(128, 128, 128),  # Match dsrl_pi0
-        log_std_init=-2.0,  # Initial log_std (smaller = more concentrated)
+        log_std_init=-0.5,  # Initial log_std (smaller = more concentrated)
         low=None,  # Action lower bound
         high=None,  # Action upper bound
         action_horizon=1,
@@ -176,22 +176,17 @@ class GaussianPolicy(nn.Module):
 
         self.shared_net = nn.Sequential(*layers)
 
-        # Mean and log_std output layers
+        # Mean output layer and input-independent learned log_std.
         self.mean_layer = nn.Linear(in_dim, output_dim)
-        self.log_std_layer = nn.Linear(in_dim, output_dim)
+        self.log_std = nn.Parameter(torch.full((output_dim,), log_std_init))
 
         # Initialize (reference: dsrl_pi0's default_init(1e-2))
-        self._init_weights(log_std_init)
+        self._init_weights()
 
-    def _init_weights(self, log_std_init):
+    def _init_weights(self):
         # Mean layer: small random init (matches dsrl_pi0's default_init(1e-2))
         nn.init.xavier_uniform_(self.mean_layer.weight, gain=0.01)
         nn.init.zeros_(self.mean_layer.bias)
-
-        # log_std layer: small random weight init with a fixed initial bias.
-        nn.init.xavier_uniform_(self.log_std_layer.weight, gain=0.01)
-        # Bias initialized to -0.5 so log_std starts at -0.5.
-        nn.init.constant_(self.log_std_layer.bias, -0.5)
 
     def forward(self, features):
         """Forward pass returning a SquashedNormal distribution.
@@ -207,7 +202,7 @@ class GaussianPolicy(nn.Module):
 
         # Compute mean and log_std
         mean = self.mean_layer(h)
-        log_std = self.log_std_layer(h)
+        log_std = self.log_std.expand_as(mean)
         # Clamp log_std range (dsrl_pi0: clip(log_stds, log_std_min, log_std_max))
         log_std = torch.clamp(log_std, -20, 2)
 
@@ -234,7 +229,7 @@ class GaussianPolicy(nn.Module):
         # Get mean and log_std
         h = self.shared_net(features)
         mean = self.mean_layer(h)
-        log_std = self.log_std_layer(h)
+        log_std = self.log_std.expand_as(mean)
         log_std = torch.clamp(log_std, -20, 2)
         std = torch.exp(log_std)
 

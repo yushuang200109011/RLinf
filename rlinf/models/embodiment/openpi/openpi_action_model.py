@@ -761,6 +761,23 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
         noise_freq = torch.fft.rfft(noise, dim=-2)
         return torch.fft.irfft(noise_freq / scale, n=noise.shape[-2], dim=-2)
 
+    def _apply_noise_covariance_filter(self, value: torch.Tensor) -> torch.Tensor:
+        if getattr(self.config, "sample_noise_type", "white") != "pink":
+            return value
+        if value.ndim < 2 or value.shape[-2] <= 1:
+            return value
+        value_dtype = value.dtype
+        value = value.to(dtype=torch.float32)
+        scale = self._pink_frequency_scale(
+            value.shape[-2], device=value.device, dtype=value.dtype
+        )
+        scale = self._reshape_frequency_scale(scale.square(), value.ndim)
+        value_freq = torch.fft.rfft(value, dim=-2)
+        filtered_value = torch.fft.irfft(
+            value_freq * scale, n=value.shape[-2], dim=-2
+        )
+        return filtered_value.to(dtype=value_dtype)
+
     def _pink_frequency_scale(
         self, horizon: int, device: torch.device, dtype: torch.dtype
     ) -> torch.Tensor:
@@ -850,8 +867,16 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
             sigmas = noise_level * torch.sqrt(sigma_ratio)[:-1]
             sigma_i = sigmas[idx][:, None, None].expand_as(x_t)
             x0_weight = torch.ones_like(t_input) - (t_input - delta)
-            x1_weight = t_input - delta - sigma_i**2 * delta / (2 * t_input)
+            x1_weight = t_input - delta
             x_t_std = torch.sqrt(delta) * sigma_i
+            score_correction = (
+                sigma_i**2
+                * delta
+                / (2 * t_input)
+                * self._apply_noise_covariance_filter(x1_pred)
+            )
+            x_t_mean = x0_pred * x0_weight + x1_pred * x1_weight - score_correction
+            return x_t_mean, x_t_std, value_t, v_t
         elif sample_method == "flow_cps":
             pi = torch.pi
             cos_term = torch.cos(pi * noise_level / 2).to(device)

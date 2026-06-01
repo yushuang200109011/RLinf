@@ -49,6 +49,8 @@ class OpenPi0Config(Pi0Config):
     noise_params: list = field(
         default_factory=lambda: [0.7, 0.3, 400]
     )  # noise_start, noise_end, noise_anneal_steps
+    sample_noise_type: str = "white"  # white, pink
+    pink_noise_alpha: float = 1.0  # power spectrum follows 1 / f**alpha
     # noise config for flow-noise
     noise_logvar_range: list = field(
         default_factory=lambda: [0.08, 0.16]
@@ -718,6 +720,74 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
             result["nft_x0"] = x_0.detach()
         return result
 
+    def sample_noise(self, shape, device):
+        noise = torch.normal(
+            mean=0.0,
+            std=1.0,
+            size=shape,
+            dtype=torch.float32,
+            device=device,
+        )
+        sample_noise_type = getattr(self.config, "sample_noise_type", "white")
+        if sample_noise_type == "white":
+            return noise
+        if sample_noise_type == "pink":
+            return self._apply_pink_filter(noise)
+        raise ValueError(f"Invalid sample noise type: {sample_noise_type}")
+
+    def _apply_pink_filter(self, noise: torch.Tensor) -> torch.Tensor:
+        if noise.ndim < 2 or noise.shape[-2] <= 1:
+            return noise
+        noise_dtype = noise.dtype
+        noise = noise.to(dtype=torch.float32)
+        scale = self._pink_frequency_scale(
+            noise.shape[-2], device=noise.device, dtype=noise.dtype
+        )
+        scale = self._reshape_frequency_scale(scale, noise.ndim)
+        noise_freq = torch.fft.rfft(noise, dim=-2)
+        colored_noise = torch.fft.irfft(noise_freq * scale, n=noise.shape[-2], dim=-2)
+        return colored_noise.to(dtype=noise_dtype)
+
+    def _whiten_pink_filter(self, noise: torch.Tensor) -> torch.Tensor:
+        if getattr(self.config, "sample_noise_type", "white") != "pink":
+            return noise
+        if noise.ndim < 2 or noise.shape[-2] <= 1:
+            return noise
+        noise = noise.to(dtype=torch.float32)
+        scale = self._pink_frequency_scale(
+            noise.shape[-2], device=noise.device, dtype=noise.dtype
+        )
+        scale = self._reshape_frequency_scale(scale, noise.ndim)
+        noise_freq = torch.fft.rfft(noise, dim=-2)
+        return torch.fft.irfft(noise_freq / scale, n=noise.shape[-2], dim=-2)
+
+    def _pink_frequency_scale(
+        self, horizon: int, device: torch.device, dtype: torch.dtype
+    ) -> torch.Tensor:
+        freqs = torch.fft.rfftfreq(horizon, d=1.0, device=device)
+        positive_freqs = freqs > 0
+        min_freq = freqs[positive_freqs].min()
+        safe_freqs = torch.where(positive_freqs, freqs, min_freq)
+        pink_noise_alpha = getattr(self.config, "pink_noise_alpha", 1.0)
+        scale = (safe_freqs / min_freq).pow(-0.5 * pink_noise_alpha)
+        scale = torch.where(positive_freqs, scale, torch.ones_like(scale))
+
+        power = scale[0].square()
+        if horizon % 2 == 0:
+            interior = scale[1:-1]
+            power = power + scale[-1].square()
+        else:
+            interior = scale[1:]
+        power = (power + 2 * interior.square().sum()) / horizon
+        return (scale / torch.sqrt(power)).to(dtype=dtype)
+
+    def _reshape_frequency_scale(
+        self, scale: torch.Tensor, noise_ndim: int
+    ) -> torch.Tensor:
+        shape = [1] * noise_ndim
+        shape[-2] = scale.shape[0]
+        return scale.reshape(shape)
+
     def _get_timesteps(self, denoise_steps, device):
         timesteps = torch.linspace(1, 1 / denoise_steps, denoise_steps, device=device)
         timesteps = torch.cat([timesteps, torch.tensor([0.0], device=device)])
@@ -887,15 +957,22 @@ class OpenPi0ForRLActionPrediction(PI0Pytorch, BasePolicy):
     # TODO: to check potential nan here
     def get_logprob_norm(self, sample, mu, sigma):
         # logprob = log p(x|mu,sigma) = -log(sigma) - 0.5 * log(2 * pi) - 0.5 * ((x - mu) / sigma) ** 2
+        sample = sample.to(dtype=torch.float32)
+        mu = mu.to(dtype=torch.float32)
+        sigma = sigma.to(dtype=torch.float32)
         if self.config.safe_get_logprob:
-            log_prob = -torch.pow((sample - mu), 2)
+            noise = self._whiten_pink_filter(sample - mu)
+            log_prob = -torch.pow(noise, 2)
         else:
             mask = sigma == 0
             sigma_safe = torch.where(mask, torch.ones_like(sigma), sigma)
+            # Pink noise is a fixed linear filter of white noise, so whiten the
+            # residual for the quadratic term. Its log-det is policy-constant.
+            noise = self._whiten_pink_filter((sample - mu) / sigma_safe)
             constant_term = -torch.log(sigma_safe) - 0.5 * torch.log(
                 2 * torch.pi * torch.ones_like(sample)
             )
-            exponent_term = -0.5 * torch.pow((sample - mu) / sigma_safe, 2)
+            exponent_term = -0.5 * torch.pow(noise, 2)
             log_prob = constant_term + exponent_term
             log_prob = torch.where(mask, torch.zeros_like(log_prob), log_prob)
         return log_prob
